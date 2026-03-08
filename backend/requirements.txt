@@ -1,0 +1,7 @@
+flask==3.1.0
+flask-cors==5.0.1
+pymongo==4.10.1
+netmiko==4.4.0
+paramiko==3.5.0
+python-dotenv==1.0.1
+gunicorn==23.0.0
