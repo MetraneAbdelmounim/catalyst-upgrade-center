@@ -8,8 +8,8 @@ import { AuthService } from './services/auth.service';
   standalone: true,
   imports: [CommonModule, RouterModule],
   template: `
-    <router-outlet *ngIf="!auth.isLoggedIn"></router-outlet>
-    <div class="app-shell" *ngIf="auth.isLoggedIn" [class.sidebar-open]="sidebarOpen">
+    <router-outlet *ngIf="!auth.isLoggedIn || auth.mustChangePassword"></router-outlet>
+    <div class="app-shell" *ngIf="auth.isLoggedIn && !auth.mustChangePassword" [class.sidebar-open]="sidebarOpen">
       <div class="sidebar-overlay" *ngIf="sidebarOpen" (click)="sidebarOpen=false"></div>
       <aside class="sidebar" [class.open]="sidebarOpen">
         <div class="sidebar-head">
@@ -24,6 +24,8 @@ import { AuthService } from './services/auth.service';
           <a class="nav-link" routerLink="/firmware" routerLinkActive="active" (click)="sidebarOpen=false"><span class="material-icons">inventory_2</span> Firmware Catalog</a>
           <div class="nav-label">Operations</div>
           <a class="nav-link" routerLink="/upgrade" routerLinkActive="active" (click)="sidebarOpen=false"><span class="material-icons">system_update_alt</span> Upgrade Center</a>
+          <div class="nav-label" *ngIf="auth.currentUser?.role==='admin'">Admin</div>
+          <a class="nav-link" routerLink="/users" routerLinkActive="active" (click)="sidebarOpen=false" *ngIf="auth.currentUser?.role==='admin'"><span class="material-icons">group</span> User Management</a>
         </nav>
         <div class="sidebar-foot" style="flex-direction:column;align-items:stretch;gap:10px">
           <div style="display:flex;align-items:center;gap:8px">

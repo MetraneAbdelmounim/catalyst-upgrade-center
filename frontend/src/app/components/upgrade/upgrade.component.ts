@@ -279,6 +279,31 @@ export class UpgradeComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.switches = d.map(s => ({ ...s, selected: false }));
       this.filteredSwitches = [...this.switches];
     });
+
+    // Check for active upgrades — restore progress view if any are running
+    this.api.getActive().subscribe(activeJobs => {
+      if (activeJobs && activeJobs.length > 0) {
+        this.activeJobs = activeJobs.map((j: any) => ({
+          ...j,
+          firmware_version: j.target_version || j.firmware_version,
+          is_stack: j.is_stack || false,
+          stack_count: j.stack_count || 1,
+          stack_members_progress: j.stack_members_progress || {},
+        }));
+        this.step = 3;
+        this.allDone = false;
+
+        // Reconnect SSE or start polling for each active job
+        activeJobs.forEach((j: any, i: number) => {
+          const jobId = j.job_id;
+          if (j.status !== 'success' && j.status !== 'failed') {
+            this._connectSSE(jobId, i);
+          } else {
+            this.checkAllDone();
+          }
+        });
+      }
+    });
   }
 
   ngOnDestroy() { this.eventSources.forEach(es => es.close()); }
@@ -365,6 +390,8 @@ export class UpgradeComponent implements OnInit, OnDestroy, AfterViewChecked {
     });
   }
 
+  private _sseRetries: { [key: string]: number } = {};
+
   private _connectSSE(jobId: string, index: number) {
     const es = this.api.streamProgress(jobId);
     this.eventSources.push(es);
@@ -373,23 +400,31 @@ export class UpgradeComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.zone.run(() => {
         const data = JSON.parse(event.data);
         if (data.status === 'not_found') { es.close(); return; }
-        // Update properties in-place to avoid Angular re-rendering the whole card
         const job = this.activeJobs[index];
         if (job) {
           Object.assign(job, data);
         }
+        this._sseRetries[jobId] = 0; // reset retries on success
         this.checkAllDone();
       });
     };
 
     es.onerror = () => {
       es.close();
-      // Don't reconnect if job is already done
       const job = this.activeJobs[index];
       if (job && job.status !== 'success' && job.status !== 'failed') {
-        // Fallback to polling every 3 seconds
-        console.log(`SSE dropped for ${jobId}, switching to polling`);
-        this._pollJob(jobId, index);
+        const retries = (this._sseRetries[jobId] || 0) + 1;
+        this._sseRetries[jobId] = retries;
+
+        if (retries <= 3) {
+          // Retry SSE after a delay
+          console.log(`SSE dropped for ${jobId}, reconnecting (attempt ${retries}/3)…`);
+          setTimeout(() => this._connectSSE(jobId, index), 3000);
+        } else {
+          // Fall back to polling
+          console.log(`SSE failed 3 times for ${jobId}, switching to polling`);
+          this._pollJob(jobId, index);
+        }
       }
     };
   }

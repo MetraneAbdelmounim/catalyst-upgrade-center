@@ -9,6 +9,7 @@ export interface AuthUser {
   username: string;
   full_name: string;
   role: string;
+  must_change_password?: boolean;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -27,6 +28,10 @@ export class AuthService {
 
   get isLoggedIn(): boolean {
     return !!this.token;
+  }
+
+  get mustChangePassword(): boolean {
+    return this.user$.value?.must_change_password === true;
   }
 
   get currentUser(): AuthUser | null {
@@ -54,6 +59,20 @@ export class AuthService {
     return this.http.post(`${this.api}/register`, {
       username, password, full_name: fullName
     });
+  }
+
+  changePassword(newPassword: string): Observable<any> {
+    return this.http.post(`${this.api}/change-password`, { new_password: newPassword }).pipe(
+      tap(() => {
+        // Clear the flag locally
+        const user = this.user$.value;
+        if (user) {
+          user.must_change_password = false;
+          localStorage.setItem(this.userKey, JSON.stringify(user));
+          this.user$.next({ ...user });
+        }
+      })
+    );
   }
 
   logout() {

@@ -912,30 +912,9 @@ def _run_upgrade(db, job_id, sw_doc, fw_doc, simulation):
                 logger.warning(f"[{job_id[:8]}] Cleanup inactive failed: {cleanup_err}")
                 _step(job_id, "Cleanup", 99, f"Cleanup warning: {str(cleanup_err)[:100]}")
 
-            try:
-                # Delete the uploaded .bin file to free space
-                _step(job_id, "Cleanup", 99, f"Deleting {fw_file} from {flash_dest}…")
-
-                # Flush channel
-                conn.read_channel()
-                time.sleep(0.5)
-                conn.write_channel("\n")
-                time.sleep(2)
-                conn.read_channel()
-                time.sleep(0.5)
-
-                del_output = conn.send_command_timing(
-                    f"delete /force {flash_dest}{fw_file}",
-                    last_read=3.0,
-                    read_timeout=30,
-                )
-                logger.info(f"[{job_id[:8]}] Delete .bin: {repr(del_output.strip()[-150:])}")
-                _step(job_id, "Cleanup", 99, f"Deleted {fw_file} ✓")
-            except Exception as del_err:
-                logger.warning(f"[{job_id[:8]}] Delete .bin failed: {del_err}")
         else:
             time.sleep(0.5)
-            _step(job_id, "Cleanup", 99, "Inactive removed, .bin deleted ✓")
+            _step(job_id, "Cleanup", 99, "Inactive packages removed ✓")
 
         # DONE
         _step(job_id, "Complete", 100,

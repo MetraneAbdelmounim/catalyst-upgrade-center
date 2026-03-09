@@ -48,6 +48,7 @@ def create_app():
         "/api/auth/register",
         "/api/auth/setup-status",
         "/api/health",
+        "/api/switches/template",
     }
 
     @app.before_request

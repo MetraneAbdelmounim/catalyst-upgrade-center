@@ -23,16 +23,16 @@ import { AuthService } from '../../services/auth.service';
           <p style="font-size:11px;color:var(--t3);margin-top:2px">Cisco Switch Upgrade Manager</p>
         </div>
 
-        <!-- Setup notice (first user) -->
+        <!-- First-time setup notice -->
         <div *ngIf="isSetup" style="background:var(--um6p-dim);border:1px solid var(--um6p-glow);border-radius:var(--r-md);padding:12px;margin-bottom:18px;font-size:12px;color:var(--um6p-light)">
           <strong>First Time Setup</strong> — Create the admin account to get started.
         </div>
 
         <h2 style="font-family:var(--font-mono);font-size:15px;font-weight:600;margin-bottom:18px">
-          {{isRegister ? 'Create Account' : 'Sign In'}}
+          {{isSetup ? 'Create Admin Account' : 'Sign In'}}
         </h2>
 
-        <div *ngIf="isRegister" class="fg">
+        <div *ngIf="isSetup" class="fg">
           <label>Full Name</label>
           <input class="fc" [(ngModel)]="fullName" placeholder="John Doe" (keyup.enter)="submit()">
         </div>
@@ -51,17 +51,12 @@ import { AuthService } from '../../services/auth.service';
 
         <button class="btn btn-p" style="width:100%;justify-content:center;padding:10px;font-size:13px" (click)="submit()" [disabled]="loading">
           <span class="material-icons" *ngIf="loading" class="spin" style="font-size:16px">sync</span>
-          {{loading ? 'Please wait…' : isRegister ? 'Create Account' : 'Sign In'}}
+          {{loading ? 'Please wait…' : isSetup ? 'Create Admin' : 'Sign In'}}
         </button>
 
-        <div style="text-align:center;margin-top:16px;font-size:12px;color:var(--t3)">
-          <span *ngIf="!isRegister && !isSetup">
-            No account? <a style="cursor:pointer;color:var(--um6p-light)" (click)="isRegister=true">Register</a>
-          </span>
-          <span *ngIf="isRegister && !isSetup">
-            Already have an account? <a style="cursor:pointer;color:var(--um6p-light)" (click)="isRegister=false">Sign In</a>
-          </span>
-        </div>
+        <p *ngIf="!isSetup" style="text-align:center;margin-top:16px;font-size:11px;color:var(--t3)">
+          Contact your administrator if you need an account.
+        </p>
       </div>
 
       <div style="position:absolute;bottom:20px;font-size:10px;color:var(--t3);letter-spacing:.5px">
@@ -92,25 +87,17 @@ export class LoginComponent implements OnInit {
   fullName = '';
   error = '';
   loading = false;
-  isRegister = false;
   isSetup = false;
 
   constructor(private auth: AuthService, private router: Router) {}
 
   ngOnInit() {
-    // If already logged in, redirect
     if (this.auth.isLoggedIn) {
       this.router.navigate(['/dashboard']);
       return;
     }
-    // Check if first time setup
     this.auth.setupStatus().subscribe({
-      next: (res) => {
-        if (!res.has_users) {
-          this.isSetup = true;
-          this.isRegister = true;
-        }
-      }
+      next: (res) => { this.isSetup = !res.has_users; }
     });
   }
 
@@ -122,22 +109,30 @@ export class LoginComponent implements OnInit {
     }
     this.loading = true;
 
-    if (this.isRegister) {
+    if (this.isSetup) {
+      // First-time: register admin then login
       this.auth.register(this.username, this.password, this.fullName).subscribe({
         next: () => {
-          // After register, auto-login
           this.auth.login(this.username, this.password).subscribe({
-            next: () => { this.router.navigate(['/dashboard']); },
+            next: () => this._redirect(),
             error: (err) => { this.loading = false; this.error = err.error?.error || 'Login failed'; }
           });
         },
-        error: (err) => { this.loading = false; this.error = err.error?.error || 'Registration failed'; }
+        error: (err) => { this.loading = false; this.error = err.error?.error || 'Setup failed'; }
       });
     } else {
       this.auth.login(this.username, this.password).subscribe({
-        next: () => { this.router.navigate(['/dashboard']); },
+        next: () => this._redirect(),
         error: (err) => { this.loading = false; this.error = err.error?.error || 'Invalid credentials'; }
       });
+    }
+  }
+
+  private _redirect() {
+    if (this.auth.mustChangePassword) {
+      this.router.navigate(['/change-password']);
+    } else {
+      this.router.navigate(['/dashboard']);
     }
   }
 }

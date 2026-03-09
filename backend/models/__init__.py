@@ -65,5 +65,6 @@ def user_schema(data: dict) -> dict:
         "password_hash": data.get("password_hash", ""),
         "full_name": data.get("full_name", ""),
         "role": data.get("role", "operator"),  # admin, operator
+        "must_change_password": data.get("must_change_password", False),
         "created_at": datetime.now(timezone.utc),
     }

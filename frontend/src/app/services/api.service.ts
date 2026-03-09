@@ -69,4 +69,10 @@ export class ApiService {
 
   // Dashboard
   getStats(): Observable<DashboardStats> { return this.http.get<DashboardStats>(`${this.api}/dashboard/stats`); }
+
+  // User Management
+  getUsers(): Observable<any[]> { return this.http.get<any[]>(`${this.api}/auth/users`); }
+  createUser(d: any): Observable<any> { return this.http.post(`${this.api}/auth/users`, d); }
+  updateUser(id: string, d: any): Observable<any> { return this.http.put(`${this.api}/auth/users/${id}`, d); }
+  deleteUser(id: string): Observable<any> { return this.http.delete(`${this.api}/auth/users/${id}`); }
 }
