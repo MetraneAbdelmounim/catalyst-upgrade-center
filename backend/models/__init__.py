@@ -57,3 +57,13 @@ def upgrade_history_schema(data: dict) -> dict:
         "error_message": data.get("error_message", ""),
         "created_at": datetime.now(timezone.utc),
     }
+
+
+def user_schema(data: dict) -> dict:
+    return {
+        "username": data.get("username", ""),
+        "password_hash": data.get("password_hash", ""),
+        "full_name": data.get("full_name", ""),
+        "role": data.get("role", "operator"),  # admin, operator
+        "created_at": datetime.now(timezone.utc),
+    }

@@ -30,7 +30,8 @@ export class ApiService {
     return this.http.post(`${this.api}/switches/bulk-delete`, { ids });
   }
   discoveryProgress(id: string): EventSource {
-    return new EventSource(`${this.api}/switches/discovery-progress/${id}/stream`);
+    const token = localStorage.getItem('jwt_token') || '';
+    return new EventSource(`${this.api}/switches/discovery-progress/${id}/stream?token=${token}`);
   }
   getTemplate(): string { return `${this.api}/switches/template`; }
 
@@ -55,7 +56,10 @@ export class ApiService {
     return this.http.post<any[]>(`${this.api}/upgrades/start`, { switch_ids: switchIds, firmware_id: firmwareId });
   }
   getProgress(jobId: string): Observable<UpgradeJob> { return this.http.get<UpgradeJob>(`${this.api}/upgrades/progress/${jobId}`); }
-  streamProgress(jobId: string): EventSource { return new EventSource(`${this.api}/upgrades/progress/${jobId}/stream`); }
+  streamProgress(jobId: string): EventSource {
+    const token = localStorage.getItem('jwt_token') || '';
+    return new EventSource(`${this.api}/upgrades/progress/${jobId}/stream?token=${token}`);
+  }
   getActive(): Observable<UpgradeJob[]> { return this.http.get<UpgradeJob[]>(`${this.api}/upgrades/active`); }
   getHistory(f?: any): Observable<any[]> {
     let p = new HttpParams();
