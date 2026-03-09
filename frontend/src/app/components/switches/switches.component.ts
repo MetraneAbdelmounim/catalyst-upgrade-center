@@ -1,4 +1,4 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, NgZone } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../../services/api.service';
@@ -15,6 +15,7 @@ import { Switch } from '../../models/interfaces';
         <button class="btn btn-g" (click)="checkAll()" [disabled]="checking">
           <span class="material-icons">{{checking ? 'sync' : 'network_check'}}</span> {{checking ? 'Checking…' : 'Check Status'}}
         </button>
+        <button class="btn btn-g" (click)="showBulkImport=true"><span class="material-icons">upload_file</span> Bulk Import</button>
         <button class="btn btn-g" (click)="showDiscover=true"><span class="material-icons">search</span> Discover</button>
         <button class="btn btn-p" (click)="openAdd()"><span class="material-icons">add</span> Add Switch</button>
       </div>
@@ -35,16 +36,23 @@ import { Switch } from '../../models/interfaces';
           <option value="NX-OS">NX-OS</option>
           <option value="IOS">IOS</option>
         </select>
+        <div style="margin-left:auto" *ngIf="selectedIds.length > 0">
+          <button class="btn btn-d" (click)="deleteSelected()">
+            <span class="material-icons">delete_sweep</span> Delete {{selectedIds.length}} selected
+          </button>
+        </div>
       </div>
 
       <!-- Table -->
       <div class="tbl-wrap">
         <table>
           <thead><tr>
+            <th style="width:40px"><input type="checkbox" [checked]="allSelected" (change)="toggleSelectAll($event)"></th>
             <th>Name</th><th>IP Address</th><th>Model</th><th>Platform</th><th>Stack</th><th>Version</th><th>Site</th><th>Status</th><th>Actions</th>
           </tr></thead>
           <tbody>
-            <tr *ngFor="let sw of switches">
+            <tr *ngFor="let sw of pagedSwitches" [style.background]="sw.selected?'var(--um6p-dim)':''">
+              <td><input type="checkbox" [(ngModel)]="sw.selected" (change)="updateSelection()"></td>
               <td style="font-weight:600">{{sw.name}}</td>
               <td class="mono">{{sw.ip_address}}</td>
               <td class="mono tsm">{{sw.model}}</td>
@@ -68,6 +76,23 @@ import { Switch } from '../../models/interfaces';
             </tr>
           </tbody>
         </table>
+      </div>
+      <!-- Pagination -->
+      <div class="pagination" *ngIf="switches.length > 0">
+        <div class="pg-info">{{(page-1)*pageSize+1}}–{{min(page*pageSize, switches.length)}} of {{switches.length}}</div>
+        <div class="pg-controls">
+          <div class="pg-size">
+            <span>Show</span>
+            <select [(ngModel)]="pageSize" (ngModelChange)="page=1">
+              <option [value]="20">20</option><option [value]="50">50</option><option [value]="100">100</option>
+            </select>
+          </div>
+          <button class="pg-btn" [disabled]="page<=1" (click)="page=1"><span class="material-icons" style="font-size:16px">first_page</span></button>
+          <button class="pg-btn" [disabled]="page<=1" (click)="page=page-1"><span class="material-icons" style="font-size:16px">chevron_left</span></button>
+          <span class="pg-info">{{page}} / {{totalPages}}</span>
+          <button class="pg-btn" [disabled]="page>=totalPages" (click)="page=page+1"><span class="material-icons" style="font-size:16px">chevron_right</span></button>
+          <button class="pg-btn" [disabled]="page>=totalPages" (click)="page=totalPages"><span class="material-icons" style="font-size:16px">last_page</span></button>
+        </div>
       </div>
       <div class="empty" *ngIf="switches.length===0"><span class="material-icons">dns</span><p>No switches found</p></div>
 
@@ -153,25 +178,228 @@ import { Switch } from '../../models/interfaces';
           </div>
         </div>
       </div>
+
+      <!-- Bulk Import Modal -->
+      <div class="modal-bg" *ngIf="showBulkImport" (click)="!discoveryRunning && (showBulkImport=false)">
+        <div class="modal-box" (click)="$event.stopPropagation()" style="max-width:700px">
+          <div class="modal-head">
+            <h3>Bulk Import Switches</h3>
+            <button class="modal-x" *ngIf="!discoveryRunning" (click)="closeBulkImport()"><span class="material-icons">close</span></button>
+          </div>
+          <div class="modal-body">
+
+            <!-- Upload Phase -->
+            <div *ngIf="!discoveryRunning && !discoveryDone">
+              <p class="t2 tsm mb-2">Upload an Excel file (.xlsx) with switch IPs and credentials. The app will auto-detect hostname, model, version, and serial via SSH.</p>
+
+              <div class="between mb-2">
+                <a [href]="templateUrl" class="btn btn-sm btn-g" download>
+                  <span class="material-icons">download</span> Download Template
+                </a>
+              </div>
+
+              <div style="border:2px dashed var(--border-1);border-radius:var(--r-lg);padding:30px;text-align:center;cursor:pointer;transition:.2s"
+                   [style.borderColor]="dragOver?'var(--um6p)':'var(--border-1)'"
+                   [style.background]="dragOver?'var(--um6p-dim)':'transparent'"
+                   (click)="fileInput.click()"
+                   (dragover)="$event.preventDefault();dragOver=true"
+                   (dragleave)="dragOver=false"
+                   (drop)="onDrop($event)">
+                <span class="material-icons" style="font-size:36px;color:var(--t3);margin-bottom:8px">cloud_upload</span>
+                <p class="t2 tsm">Drag & drop .xlsx file here or click to browse</p>
+                <p class="mono tsm t3 mt-1" *ngIf="bulkFile">{{bulkFile.name}} ({{(bulkFile.size/1024).toFixed(0)}} KB)</p>
+                <input #fileInput type="file" accept=".xlsx,.xls" style="display:none" (change)="onFileSelect($event)">
+              </div>
+
+              <div *ngIf="bulkResult?.error" class="mt-2" style="padding:14px;border-radius:var(--r-md);background:var(--red-d);border:1px solid var(--border-0)">
+                <div style="color:var(--red)">{{bulkResult.error}}</div>
+              </div>
+            </div>
+
+            <!-- Discovery Progress Phase -->
+            <div *ngIf="discoveryRunning || discoveryDone">
+              <!-- Overall progress bar -->
+              <div class="between mb-1">
+                <span class="t2 tsm" style="font-weight:600">
+                  Auto-Discovery: {{discoveryData?.completed || 0}} / {{discoveryData?.total || 0}}
+                </span>
+                <span class="badge" [ngClass]="discoveryDone ? (discoveryData?.failed > 0 ? 'b-failed' : 'b-success') : 'b-running'">
+                  {{discoveryDone ? 'Complete' : 'Running'}}
+                </span>
+              </div>
+              <div style="height:6px;background:var(--bg-1);border-radius:3px;overflow:hidden;margin-bottom:14px">
+                <div [style.width]="((discoveryData?.completed||0)/(discoveryData?.total||1)*100)+'%'"
+                     [style.background]="discoveryDone?'var(--green)':'var(--um6p)'"
+                     style="height:100%;border-radius:3px;transition:width .5s"></div>
+              </div>
+              <div class="between mb-2 tsm t2">
+                <span style="color:var(--green)">{{discoveryData?.succeeded || 0}} succeeded</span>
+                <span style="color:var(--red)" *ngIf="discoveryData?.failed > 0">{{discoveryData?.failed}} failed</span>
+                <span *ngIf="discoveryRunning">{{(discoveryData?.total||0) - (discoveryData?.completed||0)}} remaining</span>
+              </div>
+
+              <!-- Per-switch list -->
+              <div style="max-height:300px;overflow-y:auto;border:1px solid var(--border-0);border-radius:var(--r-md)">
+                <div *ngFor="let sw of discoverySwitches"
+                     style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--border-0)">
+                  <span class="material-icons" style="font-size:18px"
+                        [style.color]="sw.status==='success'?'var(--green)':sw.status==='failed'?'var(--red)':sw.status==='discovering'?'var(--um6p)':'var(--t3)'"
+                        [class.spin]="sw.status==='discovering'">
+                    {{sw.status==='success'?'check_circle':sw.status==='failed'?'error':sw.status==='discovering'?'sync':'schedule'}}
+                  </span>
+                  <span class="mono tsm" style="min-width:120px">{{sw.ip}}</span>
+                  <span class="tsm t2" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{sw.detail || '—'}}</span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+          <div class="modal-foot">
+            <button class="btn btn-g" *ngIf="discoveryDone" (click)="closeBulkImport()">Close</button>
+            <button class="btn btn-g" *ngIf="!discoveryRunning && !discoveryDone" (click)="closeBulkImport()">Cancel</button>
+            <button class="btn btn-p" *ngIf="!discoveryRunning && !discoveryDone" (click)="uploadBulk()" [disabled]="!bulkFile || bulkUploading">
+              <span class="material-icons">{{bulkUploading?'sync':'upload'}}</span>
+              {{bulkUploading?'Importing…':'Import Switches'}}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   `
 })
 export class SwitchesComponent implements OnInit {
   switches: Switch[] = [];
   search = ''; filterStatus = ''; filterPlatform = '';
-  showModal = false; showDiscover = false; editing = false;
+  showModal = false; showDiscover = false; showBulkImport = false; editing = false;
   form: Partial<Switch> = {};
   editId = '';
   discoverIp = ''; discoverUser = 'admin'; discoverPass = '';
   discovered: any = null;
   checking = false;
 
-  constructor(private api: ApiService) {}
-  ngOnInit() { this.load(); }
+  // Bulk import
+  bulkFile: File | null = null;
+  bulkResult: any = null;
+  bulkUploading = false;
+  dragOver = false;
+  templateUrl = '';
+
+  // Discovery tracking
+  discoveryRunning = false;
+  discoveryDone = false;
+  discoveryData: any = null;
+  discoverySwitches: any[] = [];
+  private discoveryEs: EventSource | null = null;
+
+  // Multi-select
+  selectedIds: string[] = [];
+  allSelected = false;
+
+  // Pagination
+  page = 1;
+  pageSize: number = 20;
+
+  get totalPages(): number { return Math.max(1, Math.ceil(this.switches.length / this.pageSize)); }
+  get pagedSwitches(): Switch[] {
+    const start = (this.page - 1) * this.pageSize;
+    return this.switches.slice(start, start + +this.pageSize);
+  }
+  min(a: number, b: number) { return Math.min(a, b); }
+
+  constructor(private api: ApiService, private zone: NgZone) {}
+  ngOnInit() {
+    this.load();
+    this.templateUrl = this.api.getTemplate();
+  }
 
   load() {
     this.api.getSwitches({ search: this.search, status: this.filterStatus, platform: this.filterPlatform })
       .subscribe(d => this.switches = d);
+  }
+
+  // Bulk Import methods
+  onFileSelect(event: any) {
+    this.bulkFile = event.target.files[0] || null;
+    this.bulkResult = null;
+  }
+
+  onDrop(event: DragEvent) {
+    event.preventDefault();
+    this.dragOver = false;
+    const file = event.dataTransfer?.files[0];
+    if (file && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls'))) {
+      this.bulkFile = file;
+      this.bulkResult = null;
+    }
+  }
+
+  uploadBulk() {
+    if (!this.bulkFile) return;
+    this.bulkUploading = true;
+    this.bulkResult = null;
+    this.api.bulkImport(this.bulkFile).subscribe({
+      next: (res) => {
+        this.bulkResult = res;
+        this.bulkUploading = false;
+        this.bulkFile = null;
+        this.load();
+
+        // Start discovery progress tracking
+        if (res.discovery_id && res.imported > 0) {
+          this.discoveryRunning = true;
+          this.discoveryDone = false;
+          this.discoveryData = null;
+          this.discoverySwitches = [];
+
+          this.discoveryEs = this.api.discoveryProgress(res.discovery_id);
+          this.discoveryEs.onmessage = (event) => {
+            this.zone.run(() => {
+              const data = JSON.parse(event.data);
+              if (data.status === 'not_found') { this.discoveryEs?.close(); return; }
+
+              this.discoveryData = data;
+              if (data.switches) {
+                this.discoverySwitches = Object.values(data.switches).sort((a: any, b: any) => {
+                  const order: any = { discovering: 0, pending: 1, success: 2, failed: 3 };
+                  return (order[a.status] ?? 4) - (order[b.status] ?? 4);
+                });
+              }
+
+              if (data.status === 'complete') {
+                this.discoveryRunning = false;
+                this.discoveryDone = true;
+                this.discoveryEs?.close();
+                this.load();
+              }
+            });
+          };
+          this.discoveryEs.onerror = () => {
+            this.zone.run(() => {
+              this.discoveryEs?.close();
+              this.discoveryRunning = false;
+              this.discoveryDone = true;
+              this.load();
+            });
+          };
+        }
+      },
+      error: (err) => {
+        this.bulkResult = { error: err.error?.error || 'Upload failed' };
+        this.bulkUploading = false;
+      }
+    });
+  }
+
+  closeBulkImport() {
+    this.showBulkImport = false;
+    this.discoveryRunning = false;
+    this.discoveryDone = false;
+    this.discoveryData = null;
+    this.discoverySwitches = [];
+    this.bulkFile = null;
+    this.bulkResult = null;
+    if (this.discoveryEs) { this.discoveryEs.close(); this.discoveryEs = null; }
+    this.load();
   }
 
   checkAll() {
@@ -184,6 +412,27 @@ export class SwitchesComponent implements OnInit {
 
   checkOne(sw: Switch) {
     this.api.checkSwitch(sw._id!).subscribe(() => this.load());
+  }
+
+  toggleSelectAll(event: any) {
+    const checked = event.target.checked;
+    this.switches.forEach(s => s.selected = checked);
+    this.updateSelection();
+  }
+
+  updateSelection() {
+    this.selectedIds = this.switches.filter(s => s.selected).map(s => s._id!);
+    this.allSelected = this.switches.length > 0 && this.switches.every(s => s.selected);
+  }
+
+  deleteSelected() {
+    if (!this.selectedIds.length) return;
+    if (!confirm(`Delete ${this.selectedIds.length} switch(es)? This cannot be undone.`)) return;
+    this.api.bulkDelete(this.selectedIds).subscribe(() => {
+      this.selectedIds = [];
+      this.allSelected = false;
+      this.load();
+    });
   }
 
   openAdd() {

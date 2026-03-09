@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, NgZone } from '@angular/core';
+import { Component, OnInit, OnDestroy, NgZone, AfterViewChecked } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../../services/api.service';
@@ -92,7 +92,7 @@ import { Switch, Firmware, UpgradeJob } from '../../models/interfaces';
 
       <!-- ═══ STEP 3: Live Progress ═══ -->
       <div *ngIf="step===3">
-        <div class="card" *ngFor="let job of activeJobs; let i = index" style="position:relative;overflow:hidden">
+        <div class="card" *ngFor="let job of activeJobs; let i = index; trackBy: trackJob" style="position:relative;overflow:hidden">
           <!-- Glow accent on top -->
           <div [style.background]="job.status==='success'?'var(--green)':job.status==='failed'?'var(--red)':'var(--um6p)'"
                style="position:absolute;top:0;left:0;right:0;height:3px"></div>
@@ -140,8 +140,8 @@ import { Switch, Firmware, UpgradeJob } from '../../models/interfaces';
           </div>
 
           <!-- Step Timeline -->
-          <div *ngIf="job.steps?.length" style="max-height:260px;overflow-y:auto">
-            <div class="step" *ngFor="let s of job.steps; let si = index">
+          <div *ngIf="job.steps?.length" class="step-timeline-scroll" [id]="'steps-' + i" style="max-height:300px;overflow-y:auto">
+            <div class="step" *ngFor="let s of job.steps; let si = index; trackBy: trackStep">
               <div class="step-ic" [ngClass]="{
                 'ok': s.status==='success' || s.progress===100 || si < job.steps.length - 1 && s.status!=='failed',
                 'run': si === job.steps.length - 1 && s.status==='running' && s.progress < 100,
@@ -205,7 +205,7 @@ import { Switch, Firmware, UpgradeJob } from '../../models/interfaces';
           <table>
             <thead><tr><th>Switch</th><th>IP</th><th>From</th><th>To</th><th>Status</th><th>Started</th><th>Finished</th></tr></thead>
             <tbody>
-              <tr *ngFor="let h of history">
+              <tr *ngFor="let h of pagedHistory">
                 <td>{{h.switch_name}}</td>
                 <td class="mono">{{h.switch_ip}}</td>
                 <td class="mono">{{h.previous_version}}</td>
@@ -217,6 +217,23 @@ import { Switch, Firmware, UpgradeJob } from '../../models/interfaces';
             </tbody>
           </table>
         </div>
+        <!-- Pagination -->
+        <div class="pagination" *ngIf="history.length > 0">
+          <div class="pg-info">{{(histPage-1)*histPageSize+1}}–{{min(histPage*histPageSize, history.length)}} of {{history.length}}</div>
+          <div class="pg-controls">
+            <div class="pg-size">
+              <span>Show</span>
+              <select [(ngModel)]="histPageSize" (ngModelChange)="histPage=1">
+                <option [value]="20">20</option><option [value]="50">50</option><option [value]="100">100</option>
+              </select>
+            </div>
+            <button class="pg-btn" [disabled]="histPage<=1" (click)="histPage=1"><span class="material-icons" style="font-size:16px">first_page</span></button>
+            <button class="pg-btn" [disabled]="histPage<=1" (click)="histPage=histPage-1"><span class="material-icons" style="font-size:16px">chevron_left</span></button>
+            <span class="pg-info">{{histPage}} / {{histTotalPages}}</span>
+            <button class="pg-btn" [disabled]="histPage>=histTotalPages" (click)="histPage=histPage+1"><span class="material-icons" style="font-size:16px">chevron_right</span></button>
+            <button class="pg-btn" [disabled]="histPage>=histTotalPages" (click)="histPage=histTotalPages"><span class="material-icons" style="font-size:16px">last_page</span></button>
+          </div>
+        </div>
         <div class="empty" *ngIf="!history.length"><span class="material-icons">update</span><p>No upgrade history</p></div>
       </div>
     </div>
@@ -226,7 +243,8 @@ import { Switch, Firmware, UpgradeJob } from '../../models/interfaces';
     input[type="radio"] { accent-color: var(--um6p); width: 15px; height: 15px; cursor: pointer; }
   `]
 })
-export class UpgradeComponent implements OnInit, OnDestroy {
+export class UpgradeComponent implements OnInit, OnDestroy, AfterViewChecked {
+  private _lastStepCounts: number[] = [];
   step = 1;
   switches: Switch[] = [];
   filteredSwitches: Switch[] = [];
@@ -244,6 +262,16 @@ export class UpgradeComponent implements OnInit, OnDestroy {
   history: any[] = [];
   showHistory = false;
 
+  // History pagination
+  histPage = 1;
+  histPageSize: number = 20;
+  get histTotalPages(): number { return Math.max(1, Math.ceil(this.history.length / this.histPageSize)); }
+  get pagedHistory(): any[] {
+    const s = (this.histPage - 1) * this.histPageSize;
+    return this.history.slice(s, s + +this.histPageSize);
+  }
+  min(a: number, b: number) { return Math.min(a, b); }
+
   constructor(private api: ApiService, private zone: NgZone) {}
 
   ngOnInit() {
@@ -254,6 +282,23 @@ export class UpgradeComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy() { this.eventSources.forEach(es => es.close()); }
+
+  ngAfterViewChecked() {
+    // Auto-scroll step timelines to bottom when new steps are added
+    this.activeJobs.forEach((job, i) => {
+      const count = job.steps?.length || 0;
+      if (count !== (this._lastStepCounts[i] || 0)) {
+        this._lastStepCounts[i] = count;
+        // Use setTimeout to scroll AFTER Angular finishes rendering the new step
+        setTimeout(() => {
+          const el = document.getElementById('steps-' + i);
+          if (el) {
+            el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+          }
+        }, 50);
+      }
+    });
+  }
 
   filterSwitches() {
     this.filteredSwitches = this.switches.filter(s => {
@@ -295,6 +340,9 @@ export class UpgradeComponent implements OnInit, OnDestroy {
 
   objectKeys = Object.keys;
 
+  trackJob(index: number, job: any): string { return job.job_id; }
+  trackStep(index: number, step: any): string { return index + '-' + step.timestamp; }
+
   startUpgrade() {
     if (!this.selectedFirmware) return;
     const ids = this.switches.filter(s => s.selected).map(s => s._id!);
@@ -325,7 +373,11 @@ export class UpgradeComponent implements OnInit, OnDestroy {
       this.zone.run(() => {
         const data = JSON.parse(event.data);
         if (data.status === 'not_found') { es.close(); return; }
-        this.activeJobs[index] = { ...this.activeJobs[index], ...data };
+        // Update properties in-place to avoid Angular re-rendering the whole card
+        const job = this.activeJobs[index];
+        if (job) {
+          Object.assign(job, data);
+        }
         this.checkAllDone();
       });
     };
@@ -348,7 +400,8 @@ export class UpgradeComponent implements OnInit, OnDestroy {
       this.api.getProgress(jobId).subscribe({
         next: (data) => {
           this.zone.run(() => {
-            this.activeJobs[index] = { ...this.activeJobs[index], ...data };
+            const job = this.activeJobs[index];
+            if (job) { Object.assign(job, data); }
             this.checkAllDone();
             if (data.status !== 'success' && data.status !== 'failed') {
               setTimeout(poll, 3000);
@@ -375,6 +428,6 @@ export class UpgradeComponent implements OnInit, OnDestroy {
   }
 
   loadHistory() {
-    this.api.getHistory({ limit: 30 }).subscribe(d => { this.history = d; this.showHistory = true; });
+    this.api.getHistory({ limit: 500 }).subscribe(d => { this.history = d; this.showHistory = true; this.histPage = 1; });
   }
 }

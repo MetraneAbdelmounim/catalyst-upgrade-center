@@ -21,6 +21,18 @@ export class ApiService {
   discoverSwitch(d: any): Observable<any> { return this.http.post(`${this.api}/switches/discover`, d); }
   checkAllSwitches(): Observable<any> { return this.http.post(`${this.api}/switches/check-all`, {}); }
   checkSwitch(id: string): Observable<any> { return this.http.post(`${this.api}/switches/${id}/check`, {}); }
+  bulkImport(file: File): Observable<any> {
+    const fd = new FormData();
+    fd.append('file', file);
+    return this.http.post(`${this.api}/switches/bulk-import`, fd);
+  }
+  bulkDelete(ids: string[]): Observable<any> {
+    return this.http.post(`${this.api}/switches/bulk-delete`, { ids });
+  }
+  discoveryProgress(id: string): EventSource {
+    return new EventSource(`${this.api}/switches/discovery-progress/${id}/stream`);
+  }
+  getTemplate(): string { return `${this.api}/switches/template`; }
 
   // Firmware
   getFirmware(f?: any): Observable<Firmware[]> {
@@ -30,6 +42,13 @@ export class ApiService {
   }
   addFirmware(d: Partial<Firmware>): Observable<Firmware> { return this.http.post<Firmware>(`${this.api}/firmware`, d); }
   deleteFirmware(id: string): Observable<any> { return this.http.delete(`${this.api}/firmware/${id}`); }
+  scanFirmware(): Observable<any> { return this.http.post(`${this.api}/firmware/scan`, {}); }
+  importScanned(files: any[], computeMd5 = false): Observable<any> {
+    return this.http.post(`${this.api}/firmware/scan/import`, { files, compute_md5: computeMd5 });
+  }
+  detectFirmware(filename: string): Observable<any> {
+    return this.http.post(`${this.api}/firmware/detect`, { filename });
+  }
 
   // Upgrades
   startUpgrade(switchIds: string[], firmwareId: string): Observable<any[]> {

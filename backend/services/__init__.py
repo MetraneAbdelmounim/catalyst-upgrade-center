@@ -856,38 +856,81 @@ def _run_upgrade(db, job_id, sw_doc, fw_doc, simulation):
         _step(job_id, "Cleanup", 98, "Removing inactive packages…")
         if not simulation:
             try:
-                # install remove inactive — removes old IOS packages to free flash space
-                conn.write_channel("install remove inactive\n")
-                time.sleep(5)
-                cleanup_buf = ""
-                for _ in range(60):  # max 5 min
-                    chunk = conn.read_channel()
-                    if chunk:
-                        cleanup_buf += chunk
-                        logger.info(f"[{job_id[:8]}] Cleanup: {repr(chunk.strip()[-150:])}")
-                    lower = cleanup_buf.lower()
-                    # Handle [y/n] confirmation
-                    if "[y/n]" in lower or "do you want to remove" in lower:
-                        conn.write_channel("y\n")
-                        time.sleep(3)
-                        cleanup_buf = ""
-                        continue
-                    if "success" in lower or "no inactive" in lower or cleanup_buf.rstrip().endswith("#"):
-                        if "removing" in lower or "success" in lower or "no inactive" in lower:
-                            break
+                # Flush channel first
+                conn.read_channel()
+                time.sleep(0.5)
+                conn.read_channel()
+                conn.write_channel("\n")
+                time.sleep(2)
+                conn.read_channel()
+                time.sleep(0.5)
+
+                # Send install remove inactive via send_command_timing
+                cleanup_output = conn.send_command_timing(
+                    "install remove inactive",
+                    last_read=5.0,
+                    read_timeout=60,
+                )
+                logger.info(f"[{job_id[:8]}] Cleanup step1: {repr(cleanup_output.strip()[-250:])}")
+
+                # Handle "Do you want to remove the above files? [y/n]"
+                if "[y/n]" in cleanup_output.lower() or "do you want to remove" in cleanup_output.lower():
+                    _step(job_id, "Cleanup", 98, "Confirming removal (y)…")
+                    conn.write_channel("y\n")
                     time.sleep(5)
-                logger.info(f"[{job_id[:8]}] Cleanup inactive result: {cleanup_buf[-200:]}")
-                _step(job_id, "Cleanup", 99, "Inactive packages removed ✓")
+
+                    # Wait for removal to complete (can take 1-2 minutes)
+                    cleanup_buf = ""
+                    for _ in range(36):  # max 3 min (36 × 5s)
+                        chunk = conn.read_channel()
+                        if chunk:
+                            cleanup_buf += chunk
+                            logger.info(f"[{job_id[:8]}] Cleanup: {repr(chunk.strip()[-150:])}")
+
+                        lower = cleanup_buf.lower()
+                        if "success" in lower or "removed" in lower:
+                            break
+                        if cleanup_buf.rstrip().endswith("#") and len(cleanup_buf.strip()) > 5:
+                            break
+                        if "%error" in lower or "failed" in lower:
+                            logger.warning(f"[{job_id[:8]}] Cleanup error: {cleanup_buf[-200:]}")
+                            break
+                        time.sleep(5)
+
+                    logger.info(f"[{job_id[:8]}] Cleanup result: {cleanup_buf[-300:]}")
+                    _step(job_id, "Cleanup", 99, "Inactive packages removed ✓")
+
+                elif "no inactive" in cleanup_output.lower() or "nothing to" in cleanup_output.lower():
+                    _step(job_id, "Cleanup", 99, "No inactive packages to remove ✓")
+                    logger.info(f"[{job_id[:8]}] No inactive packages found")
+                else:
+                    # Might already be at prompt — just log it
+                    logger.info(f"[{job_id[:8]}] Cleanup unexpected: {cleanup_output[-200:]}")
+                    _step(job_id, "Cleanup", 99, "Cleanup done ✓")
+
             except Exception as cleanup_err:
                 logger.warning(f"[{job_id[:8]}] Cleanup inactive failed: {cleanup_err}")
                 _step(job_id, "Cleanup", 99, f"Cleanup warning: {str(cleanup_err)[:100]}")
 
             try:
                 # Delete the uploaded .bin file to free space
-                del_cmd = f"delete /force {flash_dest}{fw_file}"
-                conn.send_command_timing(del_cmd, last_read=3.0, read_timeout=30)
-                logger.info(f"[{job_id[:8]}] Deleted {fw_file} from {flash_dest}")
-                _step(job_id, "Cleanup", 99, f"Deleted {fw_file} from {flash_dest} ✓")
+                _step(job_id, "Cleanup", 99, f"Deleting {fw_file} from {flash_dest}…")
+
+                # Flush channel
+                conn.read_channel()
+                time.sleep(0.5)
+                conn.write_channel("\n")
+                time.sleep(2)
+                conn.read_channel()
+                time.sleep(0.5)
+
+                del_output = conn.send_command_timing(
+                    f"delete /force {flash_dest}{fw_file}",
+                    last_read=3.0,
+                    read_timeout=30,
+                )
+                logger.info(f"[{job_id[:8]}] Delete .bin: {repr(del_output.strip()[-150:])}")
+                _step(job_id, "Cleanup", 99, f"Deleted {fw_file} ✓")
             except Exception as del_err:
                 logger.warning(f"[{job_id[:8]}] Delete .bin failed: {del_err}")
         else:
