@@ -14,21 +14,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend code
 COPY backend/ .
 
-# Copy Angular build (must be built first)
-COPY backend/static/ static/
+# Create directories
+RUN mkdir -p firmware_images logs static/browser
 
-# Create firmware directory
-RUN mkdir -p firmware_images logs
+EXPOSE 5000
 
 # Environment
 ENV PYTHONUNBUFFERED=1
 ENV MONGO_URI=mongodb://mongo:27017/cisco_upgrade_manager
 ENV SIMULATION_MODE=false
-ENV JWT_SECRET=change-me-in-production
 
-EXPOSE 5000
-
-# Run with Gunicorn — eventlet worker for SSE support
+# Run with Gunicorn
 CMD ["gunicorn", \
      "--bind", "0.0.0.0:5000", \
      "--workers", "4", \
