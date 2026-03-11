@@ -26,6 +26,7 @@ import { AuthService } from './services/auth.service';
           <a class="nav-link" routerLink="/upgrade" routerLinkActive="active" (click)="sidebarOpen=false"><span class="material-icons">system_update_alt</span> Upgrade Center</a>
           <div class="nav-label" *ngIf="auth.currentUser?.role==='admin'">Admin</div>
           <a class="nav-link" routerLink="/users" routerLinkActive="active" (click)="sidebarOpen=false" *ngIf="auth.currentUser?.role==='admin'"><span class="material-icons">group</span> User Management</a>
+          <a class="nav-link" routerLink="/settings" routerLinkActive="active" (click)="sidebarOpen=false" *ngIf="auth.currentUser?.role==='admin'"><span class="material-icons">settings</span> Settings</a>
         </nav>
         <div class="sidebar-foot" style="flex-direction:column;align-items:stretch;gap:10px">
           <div style="display:flex;align-items:center;gap:8px">

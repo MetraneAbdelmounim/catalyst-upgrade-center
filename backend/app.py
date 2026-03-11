@@ -9,7 +9,7 @@ from flask import Flask, jsonify, request, g
 from flask_cors import CORS
 from pymongo import MongoClient
 from config import Config
-from routes import init_switches, init_firmware, init_upgrades, init_dashboard, init_auth
+from routes import init_switches, init_firmware, init_upgrades, init_dashboard, init_auth, init_settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("app")
@@ -29,6 +29,8 @@ def create_app():
 
     # Register blueprints
     app.register_blueprint(init_auth(db))
+    settings_bp_inst = init_settings(db)
+    app.register_blueprint(settings_bp_inst)
     app.register_blueprint(init_switches(db))
     app.register_blueprint(init_firmware(db))
     app.register_blueprint(init_upgrades(db, simulation=sim))
@@ -49,6 +51,7 @@ def create_app():
         "/api/auth/setup-status",
         "/api/health",
         "/api/switches/template",
+        "/api/settings/setup-status",
     }
 
     @app.before_request

@@ -75,4 +75,10 @@ export class ApiService {
   createUser(d: any): Observable<any> { return this.http.post(`${this.api}/auth/users`, d); }
   updateUser(id: string, d: any): Observable<any> { return this.http.put(`${this.api}/auth/users/${id}`, d); }
   deleteUser(id: string): Observable<any> { return this.http.delete(`${this.api}/auth/users/${id}`); }
+
+  // Settings
+  getSettings(): Observable<any> { return this.http.get(`${this.api}/settings`); }
+  updateSettings(d: any): Observable<any> { return this.http.put(`${this.api}/settings`, d); }
+  testConnectivity(d: any): Observable<any> { return this.http.post(`${this.api}/settings/test-connectivity`, d); }
+  getSetupStatus(): Observable<any> { return this.http.get(`${this.api}/settings/setup-status`); }
 }

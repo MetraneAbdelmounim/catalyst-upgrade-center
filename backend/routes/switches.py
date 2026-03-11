@@ -2,8 +2,126 @@ from flask import Blueprint, request, jsonify
 from bson import ObjectId
 from datetime import datetime, timezone
 from models import switch_schema
+import re as _re
+import logging as _logging
+
+_log = _logging.getLogger("switches")
 
 switches_bp = Blueprint("switches", __name__, url_prefix="/api/switches")
+
+
+def _parse_show_version(ver_output):
+    """Parse 'show version' output to extract model, version, serial, platform."""
+    model = ""
+    version = ""
+    serial = ""
+    platform = "IOS-XE"
+    for line in ver_output.splitlines():
+        ll = line.lower()
+        if "model number" in ll or ("cisco " in ll and "processor" in ll):
+            for p in line.split():
+                if p.startswith(("C9", "C38", "C36", "C35", "N9K", "WS-", "IE-")):
+                    model = p
+        if "version" in ll and ("ios" in ll or "nx-os" in ll):
+            for p in line.split():
+                if p[0:1].isdigit():
+                    version = p.strip(",").strip()
+                    break
+            if "nx-os" in ll:
+                platform = "NX-OS"
+        if "board id" in ll or "system serial" in ll:
+            serial = line.split()[-1]
+    return model, version, serial, platform
+
+
+def _detect_stack(conn):
+    """Detect if switch is stacked via 'show switch'. Returns (is_stack, stack_count, stack_master, stack_members).
+    
+    Expected output for stacked switch:
+        Switch/Stack Mac Address : xxxx.xxxx.xxxx - Local Mac Address
+        Mac persistance wait time: Indefinite
+                                                 H/W   Current
+        Switch#   Role    Mac Address     Priority Version  State
+        -------------------------------------------------------------------------------------
+        *1       Active   xxxx.xxxx.xxxx     15     V02    Ready
+         2       Standby  xxxx.xxxx.xxxx     14     V02    Ready
+         3       Member   xxxx.xxxx.xxxx     1      V02    Ready
+    
+    Non-stacked switch returns error or single entry.
+    """
+    is_stack = False
+    stack_count = 1
+    stack_master = ""
+    stack_members = []
+
+    try:
+        output = conn.send_command("show switch", read_timeout=15)
+        _log.info(f"show switch output: {output[:300]}")
+
+        # Parse member lines: look for lines starting with * or number
+        # Pattern: *1  Active  xxxx.xxxx.xxxx  15  V02  Ready
+        #           2  Standby xxxx.xxxx.xxxx  14  V02  Ready
+        member_lines = []
+        for line in output.splitlines():
+            line = line.strip()
+            # Match lines like "*1  Active  ..." or "2  Standby  ..."
+            m = _re.match(r'^\*?(\d+)\s+(Active|Standby|Member|Ready)\s+(\S+)\s+(\d+)\s+(\S+)\s+(\S+)', line, _re.IGNORECASE)
+            if m:
+                num = int(m.group(1))
+                role = m.group(2)
+                mac = m.group(3)
+                priority = int(m.group(4))
+                hw_ver = m.group(5)
+                state = m.group(6)
+                member = {
+                    "switch_num": num,
+                    "role": role,
+                    "mac_address": mac,
+                    "priority": priority,
+                    "state": state,
+                }
+                member_lines.append(member)
+                if line.startswith("*") or role.lower() == "active":
+                    stack_master = mac
+
+        if len(member_lines) > 1:
+            is_stack = True
+            stack_count = len(member_lines)
+            stack_members = member_lines
+        elif len(member_lines) == 1:
+            # Single switch in stack mode — still technically a stack of 1
+            is_stack = False
+            stack_count = 1
+
+        # Also try 'show switch detail' for more info (model, serial per member)
+        if is_stack:
+            try:
+                detail = conn.send_command("show switch detail", read_timeout=15)
+                # Parse model and serial for each member
+                current_num = None
+                for line in detail.splitlines():
+                    m = _re.match(r'^\*?(\d+)\s+', line)
+                    if m:
+                        current_num = int(m.group(1))
+                    if current_num:
+                        ll = line.lower()
+                        if "model number" in ll:
+                            model_val = line.split(":")[-1].strip() if ":" in line else line.split()[-1]
+                            for mem in stack_members:
+                                if mem["switch_num"] == current_num:
+                                    mem["model"] = model_val
+                        if "system serial" in ll or "board id" in ll:
+                            serial_val = line.split(":")[-1].strip() if ":" in line else line.split()[-1]
+                            for mem in stack_members:
+                                if mem["switch_num"] == current_num:
+                                    mem["serial"] = serial_val
+            except Exception:
+                pass  # detail is optional
+
+    except Exception as e:
+        _log.debug(f"show switch failed (probably not stacked): {e}")
+
+    return is_stack, stack_count, stack_master, stack_members
 
 def init_switches(db):
     @switches_bp.route("", methods=["GET"])
@@ -177,32 +295,31 @@ def init_switches(db):
                             _discovery_jobs[discovery_id]["switches"][ip]["detail"] = "Reading show version…"
 
                         ver = conn.send_command("show version")
-                        conn.disconnect()
+                        model, version, serial, platform = _parse_show_version(ver)
+                        if model: update["model"] = model
+                        if version: update["current_version"] = version
+                        if serial: update["serial_number"] = serial
+                        update["platform"] = platform
 
-                        for line in ver.splitlines():
-                            ll = line.lower()
-                            if "model number" in ll or ("cisco " in ll and "processor" in ll):
-                                for p in line.split():
-                                    if p.startswith(("C9", "C38", "C36", "C35", "N9K", "WS-")):
-                                        update["model"] = p
-                            if "version" in ll and ("ios" in ll or "nx-os" in ll):
-                                for p in line.split():
-                                    if p[0:1].isdigit():
-                                        update["current_version"] = p.strip(",").strip()
-                                        break
-                                if "nx-os" in ll:
-                                    update["platform"] = "NX-OS"
-                                else:
-                                    update["platform"] = "IOS-XE"
-                            if "board id" in ll or "system serial" in ll:
-                                update["serial_number"] = line.split()[-1]
+                        # Stack detection
+                        with _discovery_lock:
+                            _discovery_jobs[discovery_id]["switches"][ip]["detail"] = "Detecting stack…"
+
+                        is_stack, stack_count, stack_master, stack_members = _detect_stack(conn)
+                        update["is_stack"] = is_stack
+                        update["stack_count"] = stack_count
+                        update["stack_master"] = stack_master
+                        update["stack_members"] = stack_members
+
+                        conn.disconnect()
 
                         update["status"] = "online"
                         update["last_seen"] = datetime.now(timezone.utc)
                         db.switches.update_one({"_id": ObjectId(sw_id)}, {"$set": update})
 
-                        detail = f"{update.get('name', ip)} — {update.get('model', '?')} — v{update.get('current_version', '?')}"
-                        log.info(f"Discovered {ip}: {detail}")
+                        stack_info = f" (Stack×{stack_count})" if is_stack else ""
+                        detail = f"{update.get('name', ip)} — {update.get('model', '?')} — v{update.get('current_version', '?')}{stack_info}"
+                        _log.info(f"Discovered {ip}: {detail}")
 
                         with _discovery_lock:
                             job = _discovery_jobs[discovery_id]
@@ -215,7 +332,7 @@ def init_switches(db):
                         update["status"] = "offline"
                         update["notes"] = f"Auto-discover failed: {str(e)[:120]}"
                         db.switches.update_one({"_id": ObjectId(sw_id)}, {"$set": update})
-                        log.warning(f"Discover failed for {ip}: {e}")
+                        _log.warning(f"Discover failed for {ip}: {e}")
 
                         with _discovery_lock:
                             job = _discovery_jobs[discovery_id]
@@ -230,11 +347,11 @@ def init_switches(db):
                         try:
                             f.result()
                         except Exception as e:
-                            log.error(f"Discovery thread error: {e}")
+                            _log.error(f"Discovery thread error: {e}")
 
                 with _discovery_lock:
                     _discovery_jobs[discovery_id]["status"] = "complete"
-                log.info(f"Bulk discovery complete: {len(rows_data)} switches")
+                _log.info(f"Bulk discovery complete: {len(rows_data)} switches")
 
             _threading.Thread(target=_auto_discover_all, daemon=True).start()
 
@@ -386,30 +503,14 @@ def init_switches(db):
             if output.strip():
                 hostname = output.strip().replace("hostname ", "").strip()
 
-            # Also grab model, version, serial from 'show version'
+            # Grab model, version, serial from 'show version'
             ver_output = conn.send_command("show version")
-            conn.disconnect()
+            model, version, serial, platform = _parse_show_version(ver_output)
 
-            model = ""
-            version = ""
-            serial = ""
-            platform = "IOS-XE"
-            for line in ver_output.splitlines():
-                ll = line.lower()
-                if "model number" in ll or "cisco " in ll and "processor" in ll:
-                    parts = line.split()
-                    for p in parts:
-                        if p.startswith("C9") or p.startswith("C38") or p.startswith("C36") or p.startswith("N9K"):
-                            model = p
-                if "version" in ll and ("ios" in ll or "nx-os" in ll):
-                    for p in line.split():
-                        if p[0:1].isdigit():
-                            version = p.strip(",").strip()
-                            break
-                    if "nx-os" in ll:
-                        platform = "NX-OS"
-                if "board id" in ll or "system serial" in ll:
-                    serial = line.split()[-1]
+            # Detect stack
+            is_stack, stack_count, stack_master, stack_members = _detect_stack(conn)
+
+            conn.disconnect()
 
             return jsonify({
                 "name": hostname or f"SW-{ip.replace('.', '-')}",
@@ -420,6 +521,10 @@ def init_switches(db):
                 "serial_number": serial or "",
                 "ssh_username": username,
                 "status": "online",
+                "is_stack": is_stack,
+                "stack_count": stack_count,
+                "stack_master": stack_master,
+                "stack_members": stack_members,
             })
 
         except Exception as ssh_err:

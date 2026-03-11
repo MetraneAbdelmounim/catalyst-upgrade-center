@@ -110,15 +110,97 @@ def init_firmware(db):
             "model_families": db.firmware.distinct("model_family"),
         })
 
+    def _get_firmware_dir():
+        """Get the firmware directory based on configured transfer method."""
+        settings = db.app_settings.find_one({"_id": "config"}) or {}
+        method = settings.get("transfer_method", "http")
+
+        # For HTTP: files are served from a local directory
+        if method == "http":
+            d = settings.get("firmware_dir")
+            if d:
+                return d, method
+            from config import Config
+            return Config.FIRMWARE_DIR, method
+
+        # For TFTP: files are on the TFTP server root — use local firmware_dir
+        if method == "tftp":
+            d = settings.get("firmware_dir")
+            if d:
+                return d, method
+            from config import Config
+            return Config.FIRMWARE_DIR, method
+
+        # For SFTP: files are on a remote server — handled separately
+        if method == "sftp":
+            return None, method
+
+        from config import Config
+        return Config.FIRMWARE_DIR, method
+
     @firmware_bp.route("/scan", methods=["POST"])
     def scan_directory():
         """Scan the firmware directory for .bin files and auto-detect info.
-        Returns list of detected firmware with option to import."""
-        from config import Config
-        firmware_dir = Config.FIRMWARE_DIR
+        For SFTP, connects to the remote server to list files."""
+        firmware_dir, method = _get_firmware_dir()
 
-        if not os.path.isdir(firmware_dir):
-            return jsonify({"error": f"Firmware directory not found: {firmware_dir}"}), 400
+        if method == "sftp":
+            # Scan remote SFTP server
+            settings = db.app_settings.find_one({"_id": "config"}) or {}
+            sftp_server = settings.get("sftp_server", "")
+            sftp_port = settings.get("sftp_port", 22)
+            sftp_user = settings.get("sftp_username", "")
+            sftp_pass = settings.get("sftp_password", "")
+            sftp_path = settings.get("sftp_path", ".")
+
+            if not sftp_server or not sftp_user:
+                return jsonify({"error": "SFTP server not configured. Go to Settings."}), 400
+
+            try:
+                import paramiko
+                ssh = paramiko.SSHClient()
+                ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                ssh.connect(sftp_server, port=int(sftp_port), username=sftp_user,
+                            password=sftp_pass, timeout=10)
+                sftp = ssh.open_sftp()
+
+                found = []
+                existing_filenames = set(
+                    doc["filename"] for doc in db.firmware.find({}, {"filename": 1})
+                )
+
+                for entry in sftp.listdir_attr(sftp_path or "."):
+                    fname = entry.filename
+                    if not fname.lower().endswith(('.bin', '.pkg', '.tar')):
+                        continue
+                    platform, model_family, version = _parse_firmware_filename(fname)
+                    found.append({
+                        "filename": fname,
+                        "file_size": entry.st_size or 0,
+                        "platform": platform,
+                        "model_family": model_family,
+                        "version": version,
+                        "file_date": datetime.fromtimestamp(entry.st_mtime).isoformat() if entry.st_mtime else "",
+                        "already_in_db": fname in existing_filenames,
+                    })
+
+                sftp.close()
+                ssh.close()
+
+                found.sort(key=lambda x: x["filename"])
+                return jsonify({
+                    "directory": f"sftp://{sftp_user}@{sftp_server}:{sftp_port}/{sftp_path}",
+                    "total_files": len(found),
+                    "new_files": sum(1 for f in found if not f["already_in_db"]),
+                    "files": found,
+                })
+
+            except Exception as e:
+                return jsonify({"error": f"SFTP scan failed: {str(e)}"}), 400
+
+        # Local directory scan (HTTP / TFTP)
+        if not firmware_dir or not os.path.isdir(firmware_dir):
+            return jsonify({"error": f"Firmware directory not found: {firmware_dir}. Configure it in Settings."}), 400
 
         found = []
         existing_filenames = set(
@@ -128,15 +210,12 @@ def init_firmware(db):
         for fname in os.listdir(firmware_dir):
             if not fname.lower().endswith(('.bin', '.pkg', '.tar')):
                 continue
-
             filepath = os.path.join(firmware_dir, fname)
             if not os.path.isfile(filepath):
                 continue
-
             file_size = os.path.getsize(filepath)
             platform, model_family, version = _parse_firmware_filename(fname)
             mtime = os.path.getmtime(filepath)
-
             found.append({
                 "filename": fname,
                 "file_size": file_size,
@@ -157,10 +236,8 @@ def init_firmware(db):
 
     @firmware_bp.route("/scan/import", methods=["POST"])
     def scan_import():
-        """Import selected scanned files into the firmware database.
-        Optionally computes MD5 hash (slow for large files)."""
-        from config import Config
-        firmware_dir = Config.FIRMWARE_DIR
+        """Import selected scanned files into the firmware database."""
+        firmware_dir, method = _get_firmware_dir()
         files = request.json.get("files", [])
         compute_md5 = request.json.get("compute_md5", False)
 
@@ -169,25 +246,26 @@ def init_firmware(db):
             fname = f.get("filename", "")
             if not fname:
                 continue
-            # Skip if already exists
             if db.firmware.find_one({"filename": fname}):
                 continue
 
-            filepath = os.path.join(firmware_dir, fname)
-            if not os.path.isfile(filepath):
-                continue
+            file_size = f.get("file_size", 0)
 
-            file_size = f.get("file_size") or os.path.getsize(filepath)
+            # For local methods, try to read size and MD5 from disk
+            md5 = ""
+            if method != "sftp" and firmware_dir:
+                filepath = os.path.join(firmware_dir, fname)
+                if os.path.isfile(filepath):
+                    file_size = file_size or os.path.getsize(filepath)
+                    if compute_md5:
+                        try:
+                            md5 = _compute_md5(filepath)
+                        except Exception:
+                            pass
+
             platform = f.get("platform", "IOS-XE")
             model_family = f.get("model_family", "")
             version = f.get("version", "")
-
-            md5 = ""
-            if compute_md5:
-                try:
-                    md5 = _compute_md5(filepath)
-                except Exception:
-                    pass
 
             doc = firmware_schema({
                 "platform": platform,
@@ -211,12 +289,13 @@ def init_firmware(db):
 
         platform, model_family, version = _parse_firmware_filename(fname)
 
-        # Check if file exists in firmware_dir to get size
-        from config import Config
-        filepath = os.path.join(Config.FIRMWARE_DIR, fname)
+        # Check if file exists locally to get size
+        firmware_dir, method = _get_firmware_dir()
         file_size = 0
-        if os.path.isfile(filepath):
-            file_size = os.path.getsize(filepath)
+        if method != "sftp" and firmware_dir:
+            filepath = os.path.join(firmware_dir, fname)
+            if os.path.isfile(filepath):
+                file_size = os.path.getsize(filepath)
 
         return jsonify({
             "filename": fname,

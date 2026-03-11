@@ -280,29 +280,33 @@ export class UpgradeComponent implements OnInit, OnDestroy, AfterViewChecked {
       this.filteredSwitches = [...this.switches];
     });
 
-    // Check for active upgrades — restore progress view if any are running
+    // Check for active upgrades — restore progress view ONLY if jobs are still running
     this.api.getActive().subscribe(activeJobs => {
-      if (activeJobs && activeJobs.length > 0) {
-        this.activeJobs = activeJobs.map((j: any) => ({
-          ...j,
-          firmware_version: j.target_version || j.firmware_version,
-          is_stack: j.is_stack || false,
-          stack_count: j.stack_count || 1,
-          stack_members_progress: j.stack_members_progress || {},
-        }));
-        this.step = 3;
-        this.allDone = false;
+      if (!activeJobs || activeJobs.length === 0) return;
 
-        // Reconnect SSE or start polling for each active job
-        activeJobs.forEach((j: any, i: number) => {
-          const jobId = j.job_id;
-          if (j.status !== 'success' && j.status !== 'failed') {
-            this._connectSSE(jobId, i);
-          } else {
-            this.checkAllDone();
-          }
-        });
-      }
+      // Only restore if there are jobs that are NOT yet complete
+      const runningJobs = activeJobs.filter((j: any) => j.status !== 'success' && j.status !== 'failed');
+      if (runningJobs.length === 0) return;
+
+      this.activeJobs = activeJobs.map((j: any) => ({
+        ...j,
+        firmware_version: j.target_version || j.firmware_version,
+        is_stack: j.is_stack || false,
+        stack_count: j.stack_count || 1,
+        stack_members_progress: j.stack_members_progress || {},
+      }));
+      this.step = 3;
+      this.allDone = false;
+
+      // Reconnect SSE or start polling for each active job
+      activeJobs.forEach((j: any, i: number) => {
+        const jobId = j.job_id;
+        if (j.status !== 'success' && j.status !== 'failed') {
+          this._connectSSE(jobId, i);
+        } else {
+          this.checkAllDone();
+        }
+      });
     });
   }
 
@@ -458,8 +462,15 @@ export class UpgradeComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.eventSources = [];
     this.activeJobs = [];
     this.selectedFirmware = null;
+    this.allDone = false;
+    this._sseRetries = {};
+    this._lastStepCounts = [];
     this.step = 1;
-    this.ngOnInit();
+    // Reload switches list only — don't call ngOnInit which restores active jobs
+    this.api.getSwitches().subscribe(d => {
+      this.switches = d.map(s => ({ ...s, selected: false }));
+      this.filteredSwitches = [...this.switches];
+    });
   }
 
   loadHistory() {

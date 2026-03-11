@@ -121,6 +121,10 @@ def start_upgrade(db, switch_doc, firmware_doc, simulation=True):
 
 
 def _run_upgrade(db, job_id, sw_doc, fw_doc, simulation):
+    # Read simulation_mode from DB settings (runtime), not startup config
+    _settings = db.app_settings.find_one({"_id": "config"}) or {}
+    simulation = _settings.get("simulation_mode", simulation)
+
     _update(job_id, status="running", started_at=datetime.now(timezone.utc).isoformat())
     db.upgrade_history.update_one({"job_id": job_id},
         {"$set": {"status": "running", "started_at": datetime.now(timezone.utc)}})
@@ -283,7 +287,9 @@ def _run_upgrade(db, job_id, sw_doc, fw_doc, simulation):
             from config import Config
             import os as _os
 
-            transfer_method = Config.TRANSFER_METHOD
+            # Read transfer settings from DB (admin dashboard), fallback to Config
+            _settings_doc = db.app_settings.find_one({"_id": "config"}) or {}
+            transfer_method = _settings_doc.get("transfer_method", Config.TRANSFER_METHOD)
             logger.info(f"[{job_id[:8]}] Transfer method: {transfer_method}")
 
             if transfer_method == "http":
@@ -298,8 +304,8 @@ def _run_upgrade(db, job_id, sw_doc, fw_doc, simulation):
                 #   1190000000 bytes copied in 20.5 secs
                 #   Switch#
 
-                http_server = Config.HTTP_SERVER
-                http_port = Config.HTTP_PORT
+                http_server = _settings_doc.get("http_server", Config.HTTP_SERVER)
+                http_port = _settings_doc.get("http_port", Config.HTTP_PORT)
                 total_mb_local = fw_size / 1_000_000
 
                 copy_cmd = f"copy http://{http_server}:{http_port}/{fw_file} {flash_dest}"
@@ -428,61 +434,171 @@ def _run_upgrade(db, job_id, sw_doc, fw_doc, simulation):
                 else:
                     raise TimeoutError(f"HTTP timed out after {max_wait}s")
 
-            elif transfer_method == "scp":
+            elif transfer_method == "sftp":
                 # ══════════════════════════════════════════════
-                # SCP Transfer
+                # SFTP Transfer (switch pulls from SFTP server)
                 # ══════════════════════════════════════════════
-                firmware_dir = Config.FIRMWARE_DIR
-                local_file = _os.path.join(firmware_dir, fw_file)
-                if not _os.path.isfile(local_file):
-                    raise FileNotFoundError(f"Firmware not found: {local_file}")
+                # IOS-XE full prompt sequence:
+                #   Switch# copy sftp://admin@10.190.100.102/file.bin flash:
+                #   Address or name of remote host [10.190.100.102]?     ← Enter
+                #   Source filename [file.bin]?                          ← Enter
+                #   Destination filename [file.bin]?                     ← Enter
+                #   Password:                                           ← send password
+                #   Accessing sftp://...
+                #   Loading file.bin !!!!!!!!!!!
+                #   bytes copied in N secs
 
-                local_size = _os.path.getsize(local_file)
-                local_mb = local_size / 1_000_000
-                _step(job_id, "File Transfer", 40,
-                      f"SCP: pushing {fw_file} ({local_mb:.0f} MB) to {flash_dest}")
+                sftp_server = _settings_doc.get("sftp_server", "")
+                sftp_user = _settings_doc.get("sftp_username", "admin")
+                sftp_pass = _settings_doc.get("sftp_password", "")
+                sftp_path = _settings_doc.get("sftp_path", "")
+                total_mb_local = fw_size / 1_000_000
 
-                try:
-                    conn.send_config_set(["ip scp server enable"], read_timeout=15)
-                except Exception:
-                    pass
+                remote_file = f"{sftp_path}/{fw_file}" if sftp_path else fw_file
+                remote_file = remote_file.replace("//", "/").lstrip("/")
 
-                from netmiko import file_transfer
-                import threading as _threading
+                copy_cmd = f"copy sftp://{sftp_user}@{sftp_server}/{remote_file} {flash_dest}"
+                _step(job_id, "File Transfer", 39,
+                      f"SFTP: {fw_file} ({total_mb_local:.0f} MB) from {sftp_user}@{sftp_server}")
+                logger.info(f"[{job_id[:8]}] SFTP cmd: {copy_cmd}")
 
-                transfer_done = _threading.Event()
-                transfer_error = [None]
+                # Flush channel
+                conn.read_channel()
+                time.sleep(0.5)
+                conn.read_channel()
+                conn.write_channel("\n")
+                time.sleep(2)
+                conn.read_channel()
+                time.sleep(0.5)
 
-                def _do_scp():
-                    try:
-                        file_transfer(conn, source_file=local_file, dest_file=fw_file,
-                                      file_system=flash_dest, direction="put", overwrite_file=True)
-                    except Exception as e:
-                        transfer_error[0] = e
-                    finally:
-                        transfer_done.set()
+                # Send copy command — first prompt
+                output = conn.send_command_timing(copy_cmd, last_read=3.0, read_timeout=30)
+                logger.info(f"[{job_id[:8]}] SFTP step1: {repr(output.strip()[-250:])}")
 
-                _threading.Thread(target=_do_scp, daemon=True).start()
+                # Handle all prompts in sequence
+                max_prompts = 10
+                for prompt_idx in range(max_prompts):
+                    lower = output.lower()
+                    handled = False
 
+                    # "Address or name of remote host [x.x.x.x]?"
+                    if "address" in lower or "remote host" in lower:
+                        _step(job_id, "File Transfer", 40, "Accepting remote host…")
+                        conn.write_channel("\n")
+                        time.sleep(2)
+                        output = conn.read_channel()
+                        logger.info(f"[{job_id[:8]}] SFTP host prompt: {repr(output.strip()[-200:])}")
+                        handled = True
+
+                    # "Source filename [file.bin]?"
+                    elif "source filename" in lower:
+                        _step(job_id, "File Transfer", 40, "Accepting source filename…")
+                        conn.write_channel("\n")
+                        time.sleep(2)
+                        output = conn.read_channel()
+                        logger.info(f"[{job_id[:8]}] SFTP source prompt: {repr(output.strip()[-200:])}")
+                        handled = True
+
+                    # "Destination filename [file.bin]?"
+                    elif "destination filename" in lower:
+                        _step(job_id, "File Transfer", 41, "Accepting destination filename…")
+                        conn.write_channel("\n")
+                        time.sleep(2)
+                        output = conn.read_channel()
+                        logger.info(f"[{job_id[:8]}] SFTP dest prompt: {repr(output.strip()[-200:])}")
+                        handled = True
+
+                    # "Password:"
+                    elif "password" in lower:
+                        _step(job_id, "File Transfer", 42, "Sending SFTP password…")
+                        conn.write_channel(sftp_pass + "\n")
+                        time.sleep(3)
+                        output = conn.read_channel()
+                        logger.info(f"[{job_id[:8]}] SFTP auth: {repr(output.strip()[-200:])}")
+                        handled = True
+
+                    # "overwrite" / "[yes/no]"
+                    elif "overwrite" in lower or "[yes/no]" in lower:
+                        _step(job_id, "File Transfer", 42, "File exists — overwriting…")
+                        conn.write_channel("y\n")
+                        time.sleep(2)
+                        output = conn.read_channel()
+                        handled = True
+
+                    # Generic "?" prompt
+                    elif output.strip().endswith("?"):
+                        conn.write_channel("\n")
+                        time.sleep(2)
+                        output = conn.read_channel()
+                        logger.info(f"[{job_id[:8]}] SFTP generic prompt: {repr(output.strip()[-200:])}")
+                        handled = True
+
+                    # Error
+                    elif "%error" in lower:
+                        raise Exception(f"SFTP error: {output.strip()[-300:]}")
+
+                    # No more prompts — transfer starting or already started
+                    if not handled:
+                        break
+
+                # Poll for completion
+                _step(job_id, "File Transfer", 43, f"SFTP transfer in progress ({total_mb_local:.0f} MB)…")
+                max_wait = 3600
                 start_time = time.time()
-                while not transfer_done.is_set():
-                    time.sleep(8)
-                    elapsed = int(time.time() - start_time)
-                    est_mb = min(elapsed * 5, local_mb * 0.95)
-                    pct = min(40 + int(est_mb / local_mb * 25), 64)
-                    _step(job_id, "File Transfer", pct,
-                          f"SCP: ~{est_mb:.0f} / {local_mb:.0f} MB — {elapsed}s")
-                    if elapsed > 3600:
-                        raise TimeoutError("SCP timed out after 1 hour")
+                cumulative = output or ""
 
-                if transfer_error[0]:
-                    raise Exception(f"SCP failed: {transfer_error[0]}")
+                while time.time() - start_time < max_wait:
+                    time.sleep(5)
+                    new_data = conn.read_channel()
+                    cumulative += new_data
+                    elapsed = int(time.time() - start_time)
+
+                    if new_data:
+                        logger.info(f"[{job_id[:8]}] SFTP raw ({len(new_data)} chars): {repr(new_data[:120])}")
+
+                    # Handle late password prompt (some IOS versions ask after Accessing)
+                    lower_cum = cumulative.lower()
+                    if "password" in lower_cum and "bytes copied" not in lower_cum and "!" not in cumulative:
+                        _step(job_id, "File Transfer", 42, "Sending SFTP password…")
+                        conn.write_channel(sftp_pass + "\n")
+                        time.sleep(3)
+                        cumulative = ""
+                        continue
+
+                    # Estimate progress
+                    bang_count = cumulative.count("!")
+                    if bang_count > 5:
+                        est_mb = min(bang_count * (total_mb_local / 3000), total_mb_local * 0.98)
+                    else:
+                        est_mb = min(elapsed * 1.3, total_mb_local * 0.95)
+                    pct = 43 + int(est_mb / total_mb_local * 22)
+                    pct = min(pct, 64)
+
+                    _step(job_id, "File Transfer", pct,
+                          f"SFTP: ~{est_mb:.0f} / {total_mb_local:.0f} MB — {elapsed}s elapsed")
+
+                    if is_stack:
+                        for j, m in enumerate(members):
+                            _update_member(job_id, str(m.get("switch_num", j+1)),
+                                           progress=30 + int(est_mb / total_mb_local * 30), status="transferring")
+
+                    if "bytes copied" in lower_cum:
+                        logger.info(f"[{job_id[:8]}] SFTP complete: {cumulative[-300:]}")
+                        break
+                    if "[ok" in lower_cum and cumulative.rstrip().endswith("#"):
+                        logger.info(f"[{job_id[:8]}] SFTP complete (OK+prompt): {cumulative[-300:]}")
+                        break
+                    if "%error" in lower_cum or "refused" in lower_cum or "unreachable" in lower_cum \
+                       or "no such file" in lower_cum or "permission denied" in lower_cum:
+                        raise Exception(f"SFTP failed: {cumulative[-400:]}")
+                else:
+                    raise TimeoutError(f"SFTP timed out after {max_wait}s — last output: {cumulative[-300:]}")
 
             else:
                 # ══════════════════════════════════════════════
                 # TFTP Transfer (legacy fallback)
                 # ══════════════════════════════════════════════
-                tftp_server = Config.TFTP_SERVER
+                tftp_server = _settings_doc.get("tftp_server", Config.TFTP_SERVER)
                 if platform == "NX-OS":
                     copy_cmd = f"copy tftp://{tftp_server}/{fw_file} {flash_dest} vrf management"
                 else:

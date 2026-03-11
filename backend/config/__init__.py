@@ -2,16 +2,16 @@ import os
 
 class Config:
     SECRET_KEY = os.environ.get("SECRET_KEY", "cisco-upgrade-secret")
-    JWT_SECRET = os.environ.get("JWT_SECRET", os.environ.get("SECRET_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWUsImlhdCI6MTUxNjIzOTAyMn0.KMUFsIDTnFmyG3nMiGM6H9FNFUROf3wh7SmqJp-QV30"))
+    JWT_SECRET = os.environ.get("JWT_SECRET", os.environ.get("SECRET_KEY", "cisco-upgrade-jwt-secret-change-me"))
     MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017/cisco_upgrade_manager")
     # Directory where firmware .bin files are stored on this server
     FIRMWARE_DIR = os.environ.get("FIRMWARE_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), "firmware_images"))
-    SIMULATION_MODE = os.environ.get("SIMULATION_MODE", "false").lower() == "true"
-    TFTP_SERVER = os.environ.get("TFTP_SERVER", "10.54.5.252")
-    # Transfer method: "http" (fastest), "scp" (encrypted), "tftp" (legacy)
+    SIMULATION_MODE = os.environ.get("SIMULATION_MODE", "true").lower() == "true"
+    TFTP_SERVER = os.environ.get("TFTP_SERVER", "10.0.0.100")
+    # Transfer method: "http" (fastest), "sftp" (encrypted), "tftp" (legacy)
     TRANSFER_METHOD = os.environ.get("TRANSFER_METHOD", "http")
     # HTTP server settings (your existing HTTP server serving firmware files)
-    HTTP_SERVER = os.environ.get("HTTP_SERVER", "10.54.5.252")
+    HTTP_SERVER = os.environ.get("HTTP_SERVER", "10.190.100.102")
     HTTP_PORT = int(os.environ.get("HTTP_PORT", "8080"))
     SSH_TIMEOUT = 30
     HEALTH_CHECK_INTERVAL = int(os.environ.get("HEALTH_CHECK_INTERVAL", "60"))
