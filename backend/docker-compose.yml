@@ -1,0 +1,69 @@
+version: "3.8"
+
+services:
+  # ── MongoDB ──────────────────────────────────────
+  mongo:
+    image: mongo:7
+    container_name: netupgrade-mongo
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+    networks:
+      - netupgrade
+
+  # ── Flask Backend (Gunicorn) ─────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: netupgrade-app
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/cisco_upgrade_manager
+      - SIMULATION_MODE=${SIMULATION_MODE:-false}
+      - JWT_SECRET=${JWT_SECRET:-netupgrade-jwt-secret-change-me}
+      - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-60}
+      - PING_TIMEOUT=${PING_TIMEOUT:-2}
+    volumes:
+      - firmware_data:/app/firmware_images
+      - app_logs:/app/logs
+    networks:
+      - netupgrade
+
+  # ── Nginx (HTTPS reverse proxy) ──────────────────
+  nginx:
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
+    container_name: netupgrade-nginx
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "8444:8444"
+      - "80:80"
+    volumes:
+      # Mount custom SSL certs (optional — overrides self-signed)
+      # - ./certs/server.crt:/etc/nginx/ssl/server.crt
+      # - ./certs/server.key:/etc/nginx/ssl/server.key
+      - nginx_logs:/var/log/nginx
+    networks:
+      - netupgrade
+
+volumes:
+  mongo_data:
+    driver: local
+  firmware_data:
+    driver: local
+  app_logs:
+    driver: local
+  nginx_logs:
+    driver: local
+
+networks:
+  netupgrade:
+    driver: bridge

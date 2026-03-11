@@ -2,11 +2,11 @@ import os
 
 class Config:
     SECRET_KEY = os.environ.get("SECRET_KEY", "cisco-upgrade-secret")
-    JWT_SECRET = os.environ.get("JWT_SECRET", os.environ.get("SECRET_KEY", "cisco-upgrade-jwt-secret-change-me"))
+    JWT_SECRET = os.environ.get("JWT_SECRET", os.environ.get("SECRET_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"))
     MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017/cisco_upgrade_manager")
     # Directory where firmware .bin files are stored on this server
     FIRMWARE_DIR = os.environ.get("FIRMWARE_DIR", os.path.join(os.path.dirname(os.path.dirname(__file__)), "firmware_images"))
-    SIMULATION_MODE = os.environ.get("SIMULATION_MODE", "true").lower() == "true"
+    SIMULATION_MODE = os.environ.get("SIMULATION_MODE", "false").lower() == "true"
     TFTP_SERVER = os.environ.get("TFTP_SERVER", "10.0.0.100")
     # Transfer method: "http" (fastest), "sftp" (encrypted), "tftp" (legacy)
     TRANSFER_METHOD = os.environ.get("TRANSFER_METHOD", "http")

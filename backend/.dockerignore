@@ -1,0 +1,11 @@
+frontend/node_modules
+frontend/.angular
+frontend/dist
+backend/__pycache__
+backend/**/__pycache__
+backend/*.pyc
+backend/logs/*
+.git
+.gitignore
+README.md
+*.md
