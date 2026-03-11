@@ -1,30 +1,23 @@
 FROM python:3.11-slim
 
-# Install system dependencies for netmiko/paramiko + ping
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libffi-dev iputils-ping openssh-client curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Install Python dependencies
-COPY backend/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend code
-COPY backend/ .
+COPY . .
 
-# Create directories
-RUN mkdir -p firmware_images logs static/browser
+RUN mkdir -p firmware_images logs
+RUN mkdir -p static/browser || true
 
 EXPOSE 5000
 
-# Environment
 ENV PYTHONUNBUFFERED=1
-ENV MONGO_URI=mongodb://mongo:27017/cisco_upgrade_manager
-ENV SIMULATION_MODE=false
 
-# Run with Gunicorn
 CMD ["gunicorn", \
      "--bind", "0.0.0.0:5000", \
      "--workers", "4", \

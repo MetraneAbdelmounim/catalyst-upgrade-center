@@ -1,19 +1,17 @@
 version: "3.8"
 
 services:
-  # ── MongoDB ──────────────────────────────────────
   mongo:
     image: mongo:7
     container_name: netupgrade-mongo
     restart: unless-stopped
     volumes:
       - mongo_data:/data/db
-    ports:
-      - "27018:27017"
     networks:
       - netupgrade
+    ports:
+      - "27018:27017"
 
-  # ── Flask Backend (Gunicorn) ─────────────────────
   app:
     build:
       context: .
@@ -34,7 +32,6 @@ services:
     networks:
       - netupgrade
 
-  # ── Nginx (HTTPS reverse proxy) ──────────────────
   nginx:
     build:
       context: .
@@ -56,14 +53,9 @@ services:
 
 volumes:
   mongo_data:
-    driver: local
   firmware_data:
-    driver: local
   app_logs:
-    driver: local
   nginx_logs:
-    driver: local
 
 networks:
   netupgrade:
-    driver: bridge
