@@ -451,11 +451,21 @@ def _run_upgrade(db, job_id, sw_doc, fw_doc, simulation):
                 sftp_server = _settings_doc.get("sftp_server", "")
                 sftp_user = _settings_doc.get("sftp_username", "admin")
                 sftp_pass = _settings_doc.get("sftp_password", "")
-                sftp_path = _settings_doc.get("sftp_path", "")
+                sftp_path = _settings_doc.get("sftp_path", "").strip()
                 total_mb_local = fw_size / 1_000_000
 
-                remote_file = f"{sftp_path}/{fw_file}" if sftp_path else fw_file
-                remote_file = remote_file.replace("//", "/").lstrip("/")
+                # Build remote file path for IOS-XE copy sftp:// command
+                # IOS-XE treats the path AFTER sftp://user@host/ as relative to user's home
+                # So if user=axians, home=/home/axians, files in /home/axians/images/:
+                #   sftp_path="/home/axians/images" → use "images/file.bin" (relative)
+                #   sftp_path="images"              → use "images/file.bin" (already relative)
+                #   sftp_path=""                    → use "file.bin" (root of home)
+                if sftp_path:
+                    # Strip leading slash — IOS-XE wants relative path from user home
+                    clean_path = sftp_path.strip("/")
+                    remote_file = f"{clean_path}/{fw_file}"
+                else:
+                    remote_file = fw_file
 
                 copy_cmd = f"copy sftp://{sftp_user}@{sftp_server}/{remote_file} {flash_dest}"
                 _step(job_id, "File Transfer", 39,
