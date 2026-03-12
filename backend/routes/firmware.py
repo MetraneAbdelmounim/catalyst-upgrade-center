@@ -199,7 +199,73 @@ def init_firmware(db):
             except Exception as e:
                 return jsonify({"error": f"SFTP scan failed: {str(e)}"}), 400
 
-        # Local directory scan (HTTP / TFTP)
+        if method == "http":
+            # Scan remote HTTP server directory listing
+            settings = db.app_settings.find_one({"_id": "config"}) or {}
+            http_server = settings.get("http_server", "")
+            http_port = settings.get("http_port", 8080)
+
+            if not http_server:
+                return jsonify({"error": "HTTP server not configured. Go to Settings."}), 400
+
+            try:
+                import http.client
+                import re as _re2
+                conn_http = http.client.HTTPConnection(http_server, int(http_port), timeout=10)
+                conn_http.request("GET", "/")
+                resp = conn_http.getresponse()
+                html = resp.read().decode("utf-8", errors="ignore")
+                conn_http.close()
+
+                # Parse directory listing — Python http.server generates <a href="filename">
+                links = _re2.findall(r'<a[^>]+href="([^"]+)"', html, _re2.IGNORECASE)
+
+                found = []
+                existing_filenames = set(
+                    doc["filename"] for doc in db.firmware.find({}, {"filename": 1})
+                )
+
+                for fname in links:
+                    fname = fname.strip("/")
+                    if not fname.lower().endswith(('.bin', '.pkg', '.tar')):
+                        continue
+
+                    # Try HEAD request to get file size
+                    file_size = 0
+                    try:
+                        conn_http2 = http.client.HTTPConnection(http_server, int(http_port), timeout=5)
+                        conn_http2.request("HEAD", f"/{fname}")
+                        head_resp = conn_http2.getresponse()
+                        cl = head_resp.getheader("Content-Length")
+                        if cl:
+                            file_size = int(cl)
+                        conn_http2.close()
+                    except Exception:
+                        pass
+
+                    platform, model_family, version = _parse_firmware_filename(fname)
+                    found.append({
+                        "filename": fname,
+                        "file_size": file_size,
+                        "platform": platform,
+                        "model_family": model_family,
+                        "version": version,
+                        "file_date": "",
+                        "already_in_db": fname in existing_filenames,
+                    })
+
+                found.sort(key=lambda x: x["filename"])
+                return jsonify({
+                    "directory": f"http://{http_server}:{http_port}/",
+                    "total_files": len(found),
+                    "new_files": sum(1 for f in found if not f["already_in_db"]),
+                    "files": found,
+                })
+
+            except Exception as e:
+                return jsonify({"error": f"HTTP scan failed: {str(e)}"}), 400
+
+        # Local directory scan (TFTP or fallback)
         if not firmware_dir or not os.path.isdir(firmware_dir):
             return jsonify({"error": f"Firmware directory not found: {firmware_dir}. Configure it in Settings."}), 400
 
