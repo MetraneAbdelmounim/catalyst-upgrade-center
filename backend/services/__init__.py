@@ -455,15 +455,14 @@ def _run_upgrade(db, job_id, sw_doc, fw_doc, simulation):
                 total_mb_local = fw_size / 1_000_000
 
                 # Build remote file path for IOS-XE copy sftp:// command
-                # IOS-XE treats the path AFTER sftp://user@host/ as relative to user's home
-                # So if user=axians, home=/home/axians, files in /home/axians/images/:
-                #   sftp_path="/home/axians/images" → use "images/file.bin" (relative)
-                #   sftp_path="images"              → use "images/file.bin" (already relative)
-                #   sftp_path=""                    → use "file.bin" (root of home)
+                # IOS-XE absolute path syntax: sftp://user@host//absolute/path/file.bin
+                # The double slash // tells IOS-XE it's an absolute path on the server
                 if sftp_path:
-                    # Strip leading slash — IOS-XE wants relative path from user home
-                    clean_path = sftp_path.strip("/")
-                    remote_file = f"{clean_path}/{fw_file}"
+                    # Ensure path starts with / for absolute
+                    abs_path = sftp_path if sftp_path.startswith("/") else f"/{sftp_path}"
+                    remote_file = f"/{abs_path}/{fw_file}".replace("///", "//").replace("//", "/")
+                    # Final: //absolute/path/file.bin (double slash prefix for IOS-XE)
+                    remote_file = f"/{remote_file.lstrip('/')}"
                 else:
                     remote_file = fw_file
 
