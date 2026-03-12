@@ -45,7 +45,6 @@ services:
       - app
     ports:
       - "8444:8444"
-      - "80:80"
     volumes:
       # Mount custom SSL certs (optional — overrides self-signed)
       # - ./certs/server.crt:/etc/nginx/ssl/server.crt
