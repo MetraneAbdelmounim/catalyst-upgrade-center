@@ -20,8 +20,8 @@ ENV PYTHONUNBUFFERED=1
 
 CMD ["gunicorn", \
      "--bind", "0.0.0.0:5000", \
-     "--workers", "4", \
-     "--threads", "8", \
+     "--workers", "1", \
+     "--threads", "16", \
      "--timeout", "3600", \
      "--keep-alive", "65", \
      "--access-logfile", "-", \

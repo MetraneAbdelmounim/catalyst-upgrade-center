@@ -20,12 +20,15 @@ services:
     restart: unless-stopped
     depends_on:
       - mongo
+    # Use host network so the container can reach switches directly
+    # Uncomment if switches are unreachable from Docker bridge network
+    # network_mode: host
     environment:
       - MONGO_URI=mongodb://mongo:27017/cisco_upgrade_manager
       - SIMULATION_MODE=${SIMULATION_MODE:-false}
       - JWT_SECRET=${JWT_SECRET:-netupgrade-jwt-secret-change-me}
       - HEALTH_CHECK_INTERVAL=${HEALTH_CHECK_INTERVAL:-60}
-      - PING_TIMEOUT=${PING_TIMEOUT:-2}
+      - PING_TIMEOUT=${PING_TIMEOUT:-3}
     volumes:
       - firmware_data:/app/firmware_images
       - app_logs:/app/logs
@@ -42,6 +45,7 @@ services:
       - app
     ports:
       - "8444:8444"
+      - "80:80"
     volumes:
       # Mount custom SSL certs (optional — overrides self-signed)
       # - ./certs/server.crt:/etc/nginx/ssl/server.crt

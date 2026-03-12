@@ -21,26 +21,39 @@ _stop_event = threading.Event()
 
 def ping_host(ip: str, timeout: int = 2) -> bool:
     """
-    Ping a host. Returns True if reachable, False otherwise.
-    Works on both Windows and Linux/Mac.
+    Check if a host is reachable.
+    Tries ICMP ping first, falls back to TCP port 22 (SSH) check.
     """
+    # Try ICMP ping
     try:
-        # -n (Windows) or -c (Linux/Mac) for count, -w/-W for timeout
         is_windows = platform.system().lower() == "windows"
         if is_windows:
-            cmd = ["ping", "-w", str(timeout * 1000), ip]
+            cmd = ["ping", "-n", "1", "-w", str(timeout * 1000), ip]
         else:
-            cmd = ["ping", "-W", str(timeout), ip]
+            cmd = ["ping", "-c", "1", "-W", str(timeout), ip]
 
         result = subprocess.run(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=timeout + 3
+            timeout=timeout + 5
         )
-        return result.returncode == 0
+        if result.returncode == 0:
+            return True
     except (subprocess.TimeoutExpired, Exception):
-        return False
+        pass
+
+    # Fallback: TCP connect to SSH port 22
+    # More reliable in Docker where ICMP may be blocked
+    import socket
+    try:
+        sock = socket.create_connection((ip, 22), timeout=timeout + 2)
+        sock.close()
+        return True
+    except (socket.timeout, socket.error, OSError):
+        pass
+
+    return False
 
 
 def check_switch(db, switch_doc, ping_timeout: int = 2) -> dict:
