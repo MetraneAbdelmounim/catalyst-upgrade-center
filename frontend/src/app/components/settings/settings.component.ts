@@ -71,9 +71,8 @@ import { ApiService } from '../../services/api.service';
             <div class="fg"><label>SFTP Username *</label><input class="fc" [(ngModel)]="s.sftp_username" placeholder="admin"></div>
             <div class="fg"><label>SFTP Password *</label><input class="fc" type="password" [(ngModel)]="s.sftp_password" placeholder="••••"></div>
           </div>
-          <div class="fg"><label>Remote Path (relative to SFTP user's home directory)</label><input class="fc" [(ngModel)]="s.sftp_path" placeholder="images  (e.g. for /home/axians/images/)" style="max-width:400px"></div>
+          <div class="fg"><label>Remote Path (absolute path on SFTP server)</label><input class="fc" [(ngModel)]="s.sftp_path" placeholder="/home/axians/images" style="max-width:400px"></div>
           <p class="tsm t3">Switch command: <span class="mono">{{getSftpPreview()}}</span></p>
-          <p class="tsm t3" style="margin-top:4px">If files are in <span class="mono">/home/{{s.sftp_username || 'user'}}/images/</span>, set path to <strong>images</strong></p>
         </div>
 
         <!-- Connectivity Test -->
@@ -186,8 +185,11 @@ export class SettingsComponent implements OnInit {
   getSftpPreview(): string {
     const user = this.s.sftp_username || '?';
     const host = this.s.sftp_server || '?';
-    const path = (this.s.sftp_path || '').replace(/^\/+/, '').replace(/\/+$/, '');
-    const filePath = path ? `${path}/filename.bin` : 'filename.bin';
-    return `copy sftp://${user}@${host}/${filePath} flash:`;
+    const raw = (this.s.sftp_path || '').trim();
+    if (raw) {
+      const abs = raw.startsWith('/') ? raw : '/' + raw;
+      return `copy sftp://${user}@${host}/${abs}/filename.bin flash:`;
+    }
+    return `copy sftp://${user}@${host}/filename.bin flash:`;
   }
 }

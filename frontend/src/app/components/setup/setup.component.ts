@@ -63,7 +63,7 @@ import { ApiService } from '../../services/api.service';
               <div class="fg"><label>Username *</label><input class="fc" [(ngModel)]="s.sftp_username" placeholder="admin"></div>
               <div class="fg"><label>Password *</label><input class="fc" type="password" [(ngModel)]="s.sftp_password" placeholder="••••"></div>
             </div>
-            <div class="fg"><label>Remote Path (relative to user home)</label><input class="fc" [(ngModel)]="s.sftp_path" placeholder="images  (e.g. for ~/images/)"></div>
+            <div class="fg"><label>Remote Path (absolute path on SFTP server)</label><input class="fc" [(ngModel)]="s.sftp_path" placeholder="/home/axians/images"></div>
           </div>
 
           <!-- Test -->

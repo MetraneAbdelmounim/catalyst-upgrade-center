@@ -188,9 +188,9 @@ def init_firmware(db):
                 ssh.close()
 
                 found.sort(key=lambda x: x["filename"])
-                display_path = sftp_path.lstrip("/") if sftp_path else ""
+                display_path = sftp_path if sftp_path else ""
                 return jsonify({
-                    "directory": f"sftp://{sftp_user}@{sftp_server}:{sftp_port}/{display_path}",
+                    "directory": f"sftp://{sftp_user}@{sftp_server}:{sftp_port}{display_path}",
                     "total_files": len(found),
                     "new_files": sum(1 for f in found if not f["already_in_db"]),
                     "files": found,
