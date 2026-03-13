@@ -130,12 +130,19 @@ import { ApiService } from '../../services/api.service';
             <input class="fc" type="number" [(ngModel)]="s.ping_timeout" placeholder="2">
           </div>
         </div>
-        <div class="fg">
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-            <input type="checkbox" [(ngModel)]="s.simulation_mode"> Simulation Mode
-          </label>
-          <p class="tsm t3 mt-1">When enabled, upgrades are simulated without touching real switches.</p>
+        <div class="form-row">
+          <div class="fg">
+            <label>Max Parallel Upgrades</label>
+            <input class="fc" type="number" [(ngModel)]="s.max_parallel_upgrades" placeholder="5" min="1" max="20">
+            <p class="tsm t3 mt-1">How many switches upgrade simultaneously. Others queue and wait. (1–20)</p>
+          </div>
+          <div class="fg" style="display:flex;align-items:flex-end;padding-bottom:36px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" [(ngModel)]="s.simulation_mode"> Simulation Mode
+            </label>
+          </div>
         </div>
+        <p *ngIf="s.simulation_mode" class="tsm t3">When enabled, upgrades are simulated without touching real switches.</p>
       </div>
     </div>
   `
@@ -167,6 +174,8 @@ export class SettingsComponent implements OnInit {
         this.s = res;
         this.saving = false;
         this.saved = true;
+        const pageBody = document.querySelector('.page-body');
+        if (pageBody) pageBody.scrollTo({ top: 0, behavior: 'smooth' });
         setTimeout(() => this.saved = false, 4000);
       },
       error: () => { this.saving = false; }

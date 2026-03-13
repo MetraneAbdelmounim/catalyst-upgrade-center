@@ -107,7 +107,13 @@ import { Switch, Firmware, UpgradeJob } from '../../models/interfaces';
               </div>
               <div class="mono tsm t2">{{job.switch_ip}} → {{job.firmware_version}}</div>
             </div>
-            <div style="text-align:center">
+            <div style="display:flex;align-items:center;gap:12px">
+              <!-- Collapse toggle -->
+              <button (click)="toggleCollapse(i)" style="background:none;border:1px solid var(--border-1);border-radius:var(--r-md);color:var(--t2);cursor:pointer;padding:4px 8px;display:flex;align-items:center;gap:4px;font-size:11px;transition:.15s"
+                      onmouseover="this.style.borderColor='var(--um6p)'" onmouseout="this.style.borderColor='var(--border-1)'">
+                <span class="material-icons" style="font-size:16px">{{expanded[i] ? 'expand_less' : 'expand_more'}}</span>
+                {{expanded[i] ? 'Hide' : 'Show'}}
+              </button>
               <!-- SVG Progress Ring -->
               <svg width="80" height="80" viewBox="0 0 80 80">
                 <circle cx="40" cy="40" r="34" fill="none" stroke="var(--bg-0)" stroke-width="6"/>
@@ -139,53 +145,56 @@ import { Switch, Firmware, UpgradeJob } from '../../models/interfaces';
             <div class="mono tsm t2">{{job.status | uppercase}}</div>
           </div>
 
-          <!-- Step Timeline -->
-          <div *ngIf="job.steps?.length" class="step-timeline-scroll" [id]="'steps-' + i" style="max-height:300px;overflow-y:auto">
-            <div class="step" *ngFor="let s of job.steps; let si = index; trackBy: trackStep">
-              <div class="step-ic" [ngClass]="{
-                'ok': s.status==='success' || s.progress===100 || si < job.steps.length - 1 && s.status!=='failed',
-                'run': si === job.steps.length - 1 && s.status==='running' && s.progress < 100,
-                'err': s.status==='failed',
-                'wait': s.status==='pending'
-              }">
-                <span class="material-icons">
-                  {{s.status==='failed' ? 'close' : (si < job.steps.length - 1 || s.status==='success' || s.progress===100) ? 'check' : s.status==='running' ? 'sync' : 'schedule'}}
+          <!-- Collapsible section: Steps + Stack Members -->
+          <div [style.display]="expanded[i] ? 'block' : 'none'">
+            <!-- Step Timeline -->
+            <div *ngIf="job.steps?.length" class="step-timeline-scroll" [id]="'steps-' + i" style="max-height:300px;overflow-y:auto">
+              <div class="step" *ngFor="let s of job.steps; let si = index; trackBy: trackStep">
+                <div class="step-ic" [ngClass]="{
+                  'ok': s.status==='success' || s.progress===100 || si < job.steps.length - 1 && s.status!=='failed',
+                  'run': si === job.steps.length - 1 && s.status==='running' && s.progress < 100,
+                  'err': s.status==='failed',
+                  'wait': s.status==='pending'
+                }">
+                  <span class="material-icons">
+                    {{s.status==='failed' ? 'close' : (si < job.steps.length - 1 || s.status==='success' || s.progress===100) ? 'check' : s.status==='running' ? 'sync' : 'schedule'}}
+                  </span>
+                </div>
+                <div class="step-body">
+                  <div class="step-name">{{s.step}}</div>
+                  <div class="step-det">{{s.detail}}</div>
+                </div>
+                <div class="step-ts">{{s.timestamp | date:'HH:mm:ss'}}</div>
+              </div>
+            </div>
+
+            <!-- Stack Member Progress -->
+            <div *ngIf="job.is_stack && job.stack_members_progress && objectKeys(job.stack_members_progress).length"
+                 style="margin-top:14px;padding:14px;background:var(--bg-0);border-radius:var(--r-md);border:1px solid var(--border-0)">
+              <div style="font-family:var(--font-mono);font-size:11px;color:var(--t2);margin-bottom:10px;letter-spacing:0.8px;text-transform:uppercase">
+                Stack Members ({{job.stack_count}})
+              </div>
+              <div *ngFor="let key of objectKeys(job.stack_members_progress)" style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                <div class="mono tsm" style="width:30px;color:var(--t2)">#{{key}}</div>
+                <div class="tsm" style="width:62px;text-transform:uppercase;font-weight:600"
+                     [style.color]="job.stack_members_progress[key].role==='active'?'var(--cyan)':job.stack_members_progress[key].role==='standby'?'var(--amber)':'var(--t2)'">
+                  {{job.stack_members_progress[key].role}}
+                </div>
+                <div class="mono tsm t2" style="width:90px">{{job.stack_members_progress[key].model}}</div>
+                <div class="prog-track" style="flex:1;height:5px">
+                  <div class="prog-fill" [class.ok]="job.stack_members_progress[key].status==='upgraded'"
+                       [style.width.%]="job.stack_members_progress[key].progress"></div>
+                </div>
+                <div class="mono tsm" style="width:35px;text-align:right"
+                     [style.color]="job.stack_members_progress[key].status==='upgraded'?'var(--green)':'var(--t2)'">
+                  {{job.stack_members_progress[key].progress}}%
+                </div>
+                <span class="badge tsm"
+                      [ngClass]="{'b-success':job.stack_members_progress[key].status==='upgraded','b-running':job.stack_members_progress[key].status==='transferring'||job.stack_members_progress[key].status==='installing'||job.stack_members_progress[key].status==='booting','b-pending':job.stack_members_progress[key].status==='pending'||job.stack_members_progress[key].status==='detected'}"
+                      style="font-size:9px;min-width:65px;justify-content:center">
+                  {{job.stack_members_progress[key].status}}
                 </span>
               </div>
-              <div class="step-body">
-                <div class="step-name">{{s.step}}</div>
-                <div class="step-det">{{s.detail}}</div>
-              </div>
-              <div class="step-ts">{{s.timestamp | date:'HH:mm:ss'}}</div>
-            </div>
-          </div>
-
-          <!-- Stack Member Progress -->
-          <div *ngIf="job.is_stack && job.stack_members_progress && objectKeys(job.stack_members_progress).length"
-               style="margin-top:14px;padding:14px;background:var(--bg-0);border-radius:var(--r-md);border:1px solid var(--border-0)">
-            <div style="font-family:var(--font-mono);font-size:11px;color:var(--t2);margin-bottom:10px;letter-spacing:0.8px;text-transform:uppercase">
-              Stack Members ({{job.stack_count}})
-            </div>
-            <div *ngFor="let key of objectKeys(job.stack_members_progress)" style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-              <div class="mono tsm" style="width:30px;color:var(--t2)">#{{key}}</div>
-              <div class="tsm" style="width:62px;text-transform:uppercase;font-weight:600"
-                   [style.color]="job.stack_members_progress[key].role==='active'?'var(--cyan)':job.stack_members_progress[key].role==='standby'?'var(--amber)':'var(--t2)'">
-                {{job.stack_members_progress[key].role}}
-              </div>
-              <div class="mono tsm t2" style="width:90px">{{job.stack_members_progress[key].model}}</div>
-              <div class="prog-track" style="flex:1;height:5px">
-                <div class="prog-fill" [class.ok]="job.stack_members_progress[key].status==='upgraded'"
-                     [style.width.%]="job.stack_members_progress[key].progress"></div>
-              </div>
-              <div class="mono tsm" style="width:35px;text-align:right"
-                   [style.color]="job.stack_members_progress[key].status==='upgraded'?'var(--green)':'var(--t2)'">
-                {{job.stack_members_progress[key].progress}}%
-              </div>
-              <span class="badge tsm"
-                    [ngClass]="{'b-success':job.stack_members_progress[key].status==='upgraded','b-running':job.stack_members_progress[key].status==='transferring'||job.stack_members_progress[key].status==='installing'||job.stack_members_progress[key].status==='booting','b-pending':job.stack_members_progress[key].status==='pending'||job.stack_members_progress[key].status==='detected'}"
-                    style="font-size:9px;min-width:65px;justify-content:center">
-                {{job.stack_members_progress[key].status}}
-              </span>
             </div>
           </div>
         </div>
@@ -258,6 +267,11 @@ export class UpgradeComponent implements OnInit, OnDestroy, AfterViewChecked {
   activeJobs: UpgradeJob[] = [];
   eventSources: EventSource[] = [];
   allDone = false;
+  expanded: { [key: number]: boolean } = {};
+
+  toggleCollapse(index: number) {
+    this.expanded[index] = !this.expanded[index];
+  }
 
   history: any[] = [];
   showHistory = false;
@@ -463,6 +477,7 @@ export class UpgradeComponent implements OnInit, OnDestroy, AfterViewChecked {
     this.activeJobs = [];
     this.selectedFirmware = null;
     this.allDone = false;
+    this.expanded = {};
     this._sseRetries = {};
     this._lastStepCounts = [];
     this.step = 1;

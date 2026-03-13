@@ -22,6 +22,7 @@ DEFAULTS = {
     "simulation_mode": True,
     "health_check_interval": 60,     # seconds, 0=disabled
     "ping_timeout": 2,
+    "max_parallel_upgrades": 5,      # how many switches upgrade at once
     "ssh_default_username": "admin",
     "ssh_default_password": "",
     "ssh_default_enable": "",
@@ -104,6 +105,11 @@ def init_settings(db):
             except: pass
         if "ping_timeout" in d:
             try: updates["ping_timeout"] = int(d["ping_timeout"])
+            except: pass
+        if "max_parallel_upgrades" in d:
+            try:
+                val = int(d["max_parallel_upgrades"])
+                updates["max_parallel_upgrades"] = max(1, min(val, 20))
             except: pass
         if "ssh_default_username" in d:
             updates["ssh_default_username"] = str(d["ssh_default_username"]).strip()

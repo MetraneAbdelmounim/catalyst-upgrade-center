@@ -12,7 +12,25 @@ logger = logging.getLogger("upgrade_engine")
 active_jobs = {}
 batch_groups = {}
 _lock = threading.Lock()
-_pool = ThreadPoolExecutor(max_workers=5, thread_name_prefix="upgrade")
+_pool = None
+
+
+def _get_pool(db=None):
+    """Get or create the thread pool. Reads max_parallel from settings."""
+    global _pool
+    max_workers = 5  # default
+    if db is not None:
+        try:
+            settings = db.app_settings.find_one({"_id": "config"}) or {}
+            max_workers = int(settings.get("max_parallel_upgrades", 5))
+            max_workers = max(1, min(max_workers, 20))  # clamp 1-20
+        except Exception:
+            pass
+    if _pool is None or _pool._max_workers != max_workers:
+        if _pool is not None:
+            pass
+        _pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="upgrade")
+    return _pool
 
 
 def get_job(job_id):
@@ -103,7 +121,7 @@ def start_batch_upgrade(db, switch_docs, firmware_doc, simulation=True):
         db.switches.update_one({"_id": sw_doc["_id"]},
             {"$set": {"status": "upgrading", "updated_at": datetime.now(timezone.utc)}})
 
-        _pool.submit(_run_upgrade, db, job_id, sw_doc, firmware_doc, simulation)
+        _get_pool(db).submit(_run_upgrade, db, job_id, sw_doc, firmware_doc, simulation)
 
         job_metas.append({
             "job_id": job_id, "batch_id": batch_id,
@@ -263,7 +281,81 @@ def _run_upgrade(db, job_id, sw_doc, fw_doc, simulation):
             time.sleep(0.8 if simulation else 0)
         _step(job_id, "Config Backup", 38, "Backup complete ✓")
 
-        # 4) File Transfer
+        # 4) Pre-Install Prep — set boot variable, save config, clean old packages
+        _step(job_id, "Pre-Install Prep", 39, "Setting boot system to packages.conf…")
+        if not simulation:
+            try:
+                # Set boot system to packages.conf
+                boot_cmd = f"boot system {flash_dest}packages.conf"
+                logger.info(f"[{job_id[:8]}] Setting boot: {boot_cmd}")
+                conn.send_config_set([boot_cmd], read_timeout=15)
+                _step(job_id, "Pre-Install Prep", 40, f"Boot set: {boot_cmd} ✓")
+            except Exception as boot_err:
+                logger.warning(f"[{job_id[:8]}] Boot config failed: {boot_err}")
+                _step(job_id, "Pre-Install Prep", 40, f"Boot config warning: {str(boot_err)[:80]}")
+
+            # Save config
+            _step(job_id, "Pre-Install Prep", 41, "Saving configuration (write memory)…")
+            try:
+                output = conn.send_command_timing("write memory", last_read=3.0, read_timeout=30)
+                logger.info(f"[{job_id[:8]}] write mem: {repr(output.strip()[-150:])}")
+                _step(job_id, "Pre-Install Prep", 42, "Configuration saved ✓")
+            except Exception as wr_err:
+                logger.warning(f"[{job_id[:8]}] write mem failed: {wr_err}")
+                _step(job_id, "Pre-Install Prep", 42, "Config save warning — continuing…")
+
+            # Remove inactive packages to free space
+            _step(job_id, "Pre-Install Prep", 43, "Removing inactive packages (install remove inactive)…")
+            try:
+                # Flush channel
+                conn.read_channel()
+                time.sleep(0.5)
+                conn.write_channel("\n")
+                time.sleep(1)
+                conn.read_channel()
+
+                cleanup_out = conn.send_command_timing(
+                    "install remove inactive",
+                    last_read=5.0,
+                    read_timeout=60,
+                )
+                logger.info(f"[{job_id[:8]}] Pre-cleanup step1: {repr(cleanup_out.strip()[-250:])}")
+
+                # Handle [y/n] prompt
+                if "[y/n]" in cleanup_out.lower() or "do you want" in cleanup_out.lower():
+                    _step(job_id, "Pre-Install Prep", 44, "Confirming removal (y)…")
+                    conn.write_channel("y\n")
+                    # Wait for completion — can take 1-3 minutes
+                    cleanup_buf = ""
+                    for _ in range(60):
+                        time.sleep(5)
+                        chunk = conn.read_channel()
+                        cleanup_buf += chunk
+                        if chunk:
+                            logger.info(f"[{job_id[:8]}] Pre-cleanup: {repr(chunk.strip()[-150:])}")
+                        if "#" in chunk and ("success" in cleanup_buf.lower() or "no inactive" in cleanup_buf.lower() or len(cleanup_buf) > 100):
+                            break
+                        if "%error" in cleanup_buf.lower():
+                            break
+                    _step(job_id, "Pre-Install Prep", 46, "Inactive packages removed ✓")
+                elif "no inactive" in cleanup_out.lower():
+                    _step(job_id, "Pre-Install Prep", 46, "No inactive packages to remove ✓")
+                else:
+                    _step(job_id, "Pre-Install Prep", 46, "Cleanup done ✓")
+            except Exception as pre_clean_err:
+                logger.warning(f"[{job_id[:8]}] Pre-cleanup failed: {pre_clean_err}")
+                _step(job_id, "Pre-Install Prep", 46, f"Cleanup warning: {str(pre_clean_err)[:80]} — continuing…")
+        else:
+            time.sleep(1)
+            _step(job_id, "Pre-Install Prep", 40, "Boot set: flash:packages.conf ✓")
+            time.sleep(0.8)
+            _step(job_id, "Pre-Install Prep", 42, "Configuration saved ✓")
+            time.sleep(1)
+            _step(job_id, "Pre-Install Prep", 46, "Inactive packages removed ✓")
+
+        _step(job_id, "Pre-Install Prep", 47, "Pre-install preparation complete ✓")
+
+        # 5) File Transfer
         total_mb = fw_size / 1_000_000
 
         if simulation:
