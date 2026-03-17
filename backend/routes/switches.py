@@ -187,7 +187,8 @@ def init_switches(db):
 
     @switches_bp.route("/bulk-import", methods=["POST"])
     def bulk_import():
-        """Import switches from XLSX + auto-discover in background with tracking."""
+        """Import switches from XLSX + auto-discover in background with tracking.
+        Credentials: uses Settings defaults unless overridden per-switch in the XLSX."""
         import io, uuid
         from openpyxl import load_workbook
 
@@ -196,6 +197,12 @@ def init_switches(db):
         file = request.files["file"]
         if not file.filename.endswith((".xlsx", ".xls")):
             return jsonify({"error": "File must be .xlsx"}), 400
+
+        # Get default credentials from Settings
+        settings = db.app_settings.find_one({"_id": "config"}) or {}
+        default_username = settings.get("ssh_default_username", "admin")
+        default_password = settings.get("ssh_default_password", "")
+        default_enable = settings.get("ssh_default_enable", "")
 
         try:
             wb = load_workbook(io.BytesIO(file.read()), read_only=True)
@@ -220,6 +227,15 @@ def init_switches(db):
                     skipped.append({"ip_address": ip, "reason": "IP already exists"})
                     continue
 
+                # Use per-switch credentials from XLSX if provided, else Settings defaults
+                excel_user = row_dict.get("ssh_username") or row_dict.get("username", "")
+                excel_pass = row_dict.get("ssh_password") or row_dict.get("password", "")
+                excel_enable = row_dict.get("enable_password") or row_dict.get("enable", "")
+
+                ssh_user = excel_user if excel_user else default_username
+                ssh_pass = excel_pass if excel_pass else default_password
+                ssh_enable = excel_enable if excel_enable else default_enable
+
                 doc = switch_schema({
                     "name": row_dict.get("name") or row_dict.get("hostname") or f"SW-{ip.replace('.', '-')}",
                     "ip_address": ip,
@@ -228,9 +244,9 @@ def init_switches(db):
                     "current_version": row_dict.get("version") or row_dict.get("current_version", ""),
                     "serial_number": row_dict.get("serial_number") or row_dict.get("serial", ""),
                     "site": row_dict.get("site") or row_dict.get("location", ""),
-                    "ssh_username": row_dict.get("ssh_username") or row_dict.get("username", "admin"),
-                    "ssh_password": row_dict.get("ssh_password") or row_dict.get("password", ""),
-                    "enable_password": row_dict.get("enable_password") or row_dict.get("enable", ""),
+                    "ssh_username": ssh_user,
+                    "ssh_password": ssh_pass,
+                    "enable_password": ssh_enable,
                     "status": "discovering",
                     "notes": row_dict.get("notes", ""),
                 })
@@ -239,8 +255,8 @@ def init_switches(db):
                 imported.append(doc)
                 rows_data.append({
                     "id": str(result.inserted_id), "ip": ip,
-                    "username": doc["ssh_username"], "password": doc["ssh_password"],
-                    "enable": doc["enable_password"],
+                    "username": ssh_user, "password": ssh_pass,
+                    "enable": ssh_enable,
                 })
             wb.close()
         except Exception as e:
@@ -404,9 +420,10 @@ def init_switches(db):
         ws.title = "Switches"
 
         # Headers
-        headers = ["ip_address", "ssh_username", "ssh_password", "enable_password", "site", "notes"]
+        headers = ["ip_address", "site", "notes", "ssh_username", "ssh_password", "enable_password"]
         header_fill = PatternFill(start_color="C8462B", end_color="C8462B", fill_type="solid")
         header_font = Font(color="FFFFFF", bold=True, size=11)
+        optional_fill = PatternFill(start_color="555555", end_color="555555", fill_type="solid")
         thin_border = Border(
             left=Side(style="thin"), right=Side(style="thin"),
             top=Side(style="thin"), bottom=Side(style="thin"),
@@ -414,46 +431,59 @@ def init_switches(db):
 
         for col, h in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=h)
-            cell.fill = header_fill
+            # Credential columns get grey header to show they're optional
+            cell.fill = header_fill if col <= 3 else optional_fill
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center")
             cell.border = thin_border
 
         # Example rows
         examples = [
-            ["10.0.1.1", "admin", "cisco123", "enable123", "HQ-DataCenter", "Core switch"],
-            ["10.0.1.2", "admin", "cisco123", "enable123", "HQ-Floor2", ""],
-            ["10.0.2.10", "admin", "cisco123", "", "Branch-Office-1", "Access switch"],
+            ["10.0.1.1", "HQ-DataCenter", "Core switch", "", "", ""],
+            ["10.0.1.2", "HQ-Floor2", "Access switch", "", "", ""],
+            ["10.0.2.10", "Branch-Office", "Different creds", "branchuser", "branchpass", "enable123"],
         ]
         for row_idx, ex in enumerate(examples, 2):
             for col, val in enumerate(ex, 1):
                 cell = ws.cell(row=row_idx, column=col, value=val)
                 cell.border = thin_border
+                if col >= 4 and val:
+                    cell.font = Font(color="C8462B")  # highlight overridden creds
 
         # Column widths
         ws.column_dimensions["A"].width = 18
-        ws.column_dimensions["B"].width = 15
-        ws.column_dimensions["C"].width = 15
-        ws.column_dimensions["D"].width = 18
-        ws.column_dimensions["E"].width = 20
-        ws.column_dimensions["F"].width = 25
+        ws.column_dimensions["B"].width = 20
+        ws.column_dimensions["C"].width = 25
+        ws.column_dimensions["D"].width = 16
+        ws.column_dimensions["E"].width = 16
+        ws.column_dimensions["F"].width = 18
 
         # Add instructions sheet
         ws2 = wb.create_sheet("Instructions")
         instructions = [
             "Cisco Switch Bulk Import Template",
             "",
-            "Required columns:",
-            "  ip_address — Switch management IP (required)",
-            "  ssh_username — SSH login username",
-            "  ssh_password — SSH login password",
+            "REQUIRED column:",
+            "  ip_address — Switch management IP",
             "",
-            "Optional columns:",
-            "  enable_password — Enable/secret password",
+            "OPTIONAL columns:",
             "  site — Site/location name",
             "  notes — Any notes",
             "",
-            "Optional (auto-detected via SSH if left blank):",
+            "CREDENTIAL columns (leave empty to use Settings defaults):",
+            "  ssh_username — Only if different from Settings default",
+            "  ssh_password — Only if different from Settings default",
+            "  enable_password — Only if different from Settings default",
+            "",
+            "HOW CREDENTIALS WORK:",
+            "  - If username/password columns are EMPTY or not present,",
+            "    the app uses the default credentials from Settings > SSH Defaults.",
+            "  - If a switch has DIFFERENT credentials, fill them in the XLSX",
+            "    and those will be used INSTEAD of the defaults.",
+            "  - This way you can import 100 switches with the same creds",
+            "    by just listing their IPs, no need to repeat credentials.",
+            "",
+            "OPTIONAL (auto-detected via SSH if left blank):",
             "  name / hostname",
             "  model",
             "  platform (IOS-XE / NX-OS / IOS)",
@@ -461,7 +491,7 @@ def init_switches(db):
             "  serial_number",
             "",
             "After import, the app will SSH to each switch",
-            "and auto-detect: hostname, model, version, serial, platform.",
+            "and auto-detect: hostname, model, version, serial, platform, stack info.",
         ]
         for i, line in enumerate(instructions, 1):
             cell = ws2.cell(row=i, column=1, value=line)
@@ -469,6 +499,8 @@ def init_switches(db):
                 cell.font = Font(bold=True, size=14, color="C8462B")
             elif line.startswith("  "):
                 cell.font = Font(name="Consolas", size=10)
+            elif line.startswith("HOW CREDENTIALS"):
+                cell.font = Font(bold=True, size=11, color="C8462B")
 
         buf = io.BytesIO()
         wb.save(buf)
@@ -481,9 +513,13 @@ def init_switches(db):
     def discover():
         d = request.json
         ip = d.get("ip_address", "")
-        username = d.get("ssh_username", "admin")
-        password = d.get("ssh_password", "")
         if not ip: return jsonify({"error": "ip_address required"}), 400
+
+        # Use provided credentials, fall back to Settings defaults
+        settings = db.app_settings.find_one({"_id": "config"}) or {}
+        username = d.get("ssh_username") or settings.get("ssh_default_username", "admin")
+        password = d.get("ssh_password") or settings.get("ssh_default_password", "")
+        enable = d.get("enable_password") or settings.get("ssh_default_enable", "")
 
         hostname = ""
 
@@ -493,7 +529,7 @@ def init_switches(db):
             conn = ConnectHandler(
                 device_type="cisco_xe", host=ip,
                 username=username, password=password,
-                secret=d.get("enable_password", ""),
+                secret=enable,
                 timeout=10
             )
             conn.enable()
